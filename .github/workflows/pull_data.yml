@@ -1,0 +1,14 @@
+on:
+  schedule:
+    cron: 0 0 1 * *
+
+jobs:
+  pull_data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Pull data
+        run: |
+          hatch run python src/data_acquisition/pull_data.py
