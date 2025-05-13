@@ -21,4 +21,4 @@ jobs:
 
       - name: Pull data
         run: |
-          hatch run python src/data_acquisition/pull_data.py
+          python src/data_acquisition/pull_data.py
