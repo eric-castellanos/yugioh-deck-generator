@@ -1,5 +1,8 @@
+from datetime import datetime
+
 import pygo_API
 import polars as pl
+import boto3
 
 def flatten_yugioh_cards(cards: list[dict]) -> pl.DataFrame:
     return pl.from_dicts(
@@ -30,6 +33,19 @@ def pull_data():
     df = flatten_yugioh_cards(cards)
     return df
 
-tcg_df = pull_data()
-print(tcg_df.head(10))
-print(len(tcg_df))
+def upload_to_s3(df, bucket: str, prefix: str):
+    filename = f"yugioh_raw_{datetime.today().strftime('%Y-%m-%d')}.parquet"
+    filepath = f"/tmp/{filename}"
+    s3_key = f"{prefix}/{datetime.today().strftime('%Y-%m')}/{filename}"
+
+    # Save locally
+    df.write_parquet(filepath)
+
+    # Upload to S3
+    s3 = boto3.client("s3")
+    s3.upload_file(filepath, bucket, s3_key)
+    print(f"Uploaded to s3://{bucket}/{s3_key}")
+
+if __name__ == "__main__":
+    tcg_df = pull_data()
+    upload_to_s3(tcg_df, "yugioh-data", "raw")
