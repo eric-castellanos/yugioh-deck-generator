@@ -20,7 +20,7 @@ jobs:
       - name: Build Docker image
         run: |
           docker build \
-          -f ../../src/data_pull_api/Dockerfile \
+          -f src/data_pull_api/Dockerfile \
           -t yugioh-data-pull .
 
       - name: Run Docker container
