@@ -1,15 +1,15 @@
 # --- Stage 1: Build ---
 FROM python:3.11-slim as build 
 
-COPY ../../sh/install_poetry.sh /tmp/
+COPY sh/install_poetry.sh /tmp/
 RUN bash /tmp/install_poetry.sh
 
 # Copy pyproject.toml and poetry.lock from two levels up
-COPY ../../pyproject.toml ../../poetry.lock ./
+COPY pyproject.toml poetry.lock ./
 
 RUN poetry install --only pull_api --no-root --sync
 
-COPY ./pull_data.py /app/pull_data.py
+COPY src/data_pull_api/pull_data.py /app/pull_data.py
 
 # --- Stage 2: Run ---
 FROM python:3.11-slim as run
