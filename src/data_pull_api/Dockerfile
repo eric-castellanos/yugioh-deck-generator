@@ -9,15 +9,19 @@ COPY pyproject.toml poetry.lock ./
 
 ENV PATH="/root/.local/bin:$PATH"
 
-RUN poetry install --only pull_api --no-root --sync
+# Export dependencies from the specific group
+RUN poetry export --only pull_api --without-hashes -f requirements.txt > requirements.txt
 
 COPY src/data_pull_api/pull_data.py ./app/pull_data.py
 
 # --- Stage 2: Run ---
 FROM python:3.11-slim as run
 
-# Copy installed packages from builder
-COPY --from=build /root/.cache/pypoetry/virtualenvs /venv
+
+# Install dependencies
+COPY --from=build /app/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
 # Copy the script only
 COPY --from=build /app/pull_data.py ./pull_data.py
 
