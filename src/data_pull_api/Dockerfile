@@ -1,5 +1,5 @@
 # --- Stage 1: Build ---
-FROM python:3.11-slim as build 
+FROM python:3.11 as build 
 
 COPY sh/install_poetry.sh /tmp/
 RUN bash /tmp/install_poetry.sh
@@ -16,10 +16,12 @@ FROM python:3.11-slim as run
 
 # Copy installed packages from builder
 COPY --from=build /root/.cache/pypoetry/virtualenvs /venv
-ENV PATH="/venv/bin:$PATH"
-
 # Copy the script only
 COPY --from=build /build/pull_data.py ./pull_data.py
+
+# Ensure poetry-installed packages are in path
+ENV PATH="/root/.local/bin:$PATH"
+ENV PYTHONPATH="/root/.local/lib/python3.11/site-packages"
 
 # Run script
 CMD ["python", "pull_data.py"]
