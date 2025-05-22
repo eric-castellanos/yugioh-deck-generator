@@ -7,6 +7,8 @@ RUN bash /tmp/install_poetry.sh
 # Copy pyproject.toml and poetry.lock from two levels up
 COPY pyproject.toml poetry.lock ./
 
+ENV PATH="/root/.local/bin:$PATH"
+
 RUN poetry install --only pull_api --no-root --sync
 
 COPY src/data_pull_api/pull_data.py /app/pull_data.py
