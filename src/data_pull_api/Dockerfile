@@ -11,7 +11,7 @@ ENV PATH="/root/.local/bin:$PATH"
 
 RUN poetry install --only pull_api --no-root --sync
 
-COPY src/data_pull_api/pull_data.py /app/pull_data.py
+COPY src/data_pull_api/pull_data.py ./app/pull_data.py
 
 # --- Stage 2: Run ---
 FROM python:3.11-slim as run
@@ -19,7 +19,7 @@ FROM python:3.11-slim as run
 # Copy installed packages from builder
 COPY --from=build /root/.cache/pypoetry/virtualenvs /venv
 # Copy the script only
-COPY --from=build /build/pull_data.py ./pull_data.py
+COPY --from=build /app/pull_data.py ./pull_data.py
 
 # Ensure poetry-installed packages are in path
 ENV PATH="/root/.local/bin:$PATH"
