@@ -4,7 +4,7 @@ set -e
 # Install Poetry if not already installed
 if ! command -v poetry &> /dev/null; then
   echo "Installing Poetry..."
-  curl -sSL https://install.python-poetry.org | python3 -
+  curl -sSL https://install.python-poetry.org | POETRY_VERSION=1.8.2 python3 -
 else
   echo "Poetry already installed"
 fi
