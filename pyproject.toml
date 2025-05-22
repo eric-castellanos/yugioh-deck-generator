@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Environment Setup, Dependency Installation, and Metadata for yugioh-deck-generator"
 authors = ["eric-castellanos <ericcastellanos229@gmail.com>"]
 readme = "README.md"
+
+[tool.poetry.dependencies]
 python = ">=3.9"
 
 [build-system]
