@@ -1,8 +1,14 @@
 # --- Stage 1: Build ---
 FROM python:3.11-slim as build
 
+# Install wget and clean up after
+RUN apt-get update && apt-get install -y wget && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY sh/install_poetry.sh /tmp/
-RUN bash /tmp/install_poetry.sh
+RUN bash /tmp/install_poetry.sh && \
+    export PATH="/root/.local/bin:$PATH" && \
+    poetry --version
 ENV PATH="/root/.local/bin:$PATH"
     
 WORKDIR /app
