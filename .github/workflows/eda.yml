@@ -6,10 +6,6 @@ on:
   schedule:
     - cron: "0 0 1 * *"
 
-  push:
-    branches:
-        - feature/*
-
 jobs:
   eda:
     runs-on: ubuntu-latest
