@@ -19,6 +19,7 @@ boto3 = "^1.34.0"
 urllib3 = "<1.27"
 
 [tool.poetry.group.preprocessing.dependencies]
+polars = "^1.30.0"
 pandas = "1.5.3"
 numba = "0.57.1"
 numpy = "1.23.5"
