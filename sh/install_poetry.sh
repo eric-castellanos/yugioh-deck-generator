@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Ensure Poetry is on PATH for current shell
+# Ensure Poetry is on PATH for current shell, included for running locally
 export PATH="$HOME/.local/bin:$PATH"
 
 # Install Poetry if not already installed
