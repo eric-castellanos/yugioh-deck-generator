@@ -12,15 +12,9 @@ def read_from_s3(bucket: str, key: str) -> pl.DataFrame:
     s3 = boto3.client("s3")
     response = s3.get_object(Bucket=bucket, Key=key)
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)
-    tmp.write(response["Body"].read())
-    tmp.flush()
-    tmp.close()
+    lf = pl.scan_parquet(response['Body'])
 
-    tmp_path = tmp.name
-    lf = pl.scan_parquet(tmp_path)
-
-    return lf, tmp_path
+    return lf
 
 def encode_categoricals(lf: pl.LazyFrame, cat_cols: List[str], fill_value: str = "None") -> pl.LazyFrame:
     """
@@ -108,6 +102,7 @@ def drop_columns(
 def cats_to_dummies_eager(df : pl.DataFrame) -> pl.DataFrame:
     pass
 
+# may be worth trying out different values of max_features and n_components to view perforomance differences
 def add_tfidf_description_features(df: pl.DataFrame, 
                                    desc_col: str = "desc", 
                                    max_features: int = 300, 
@@ -144,7 +139,7 @@ def add_tfidf_description_features(df: pl.DataFrame,
     return df
 
 if __name__ == "__main__":
-    lf, tmp_path = read_from_s3("yugioh-data", "raw/2025-05/yugioh_raw_2025-05-22.parquet")
+    lf = read_from_s3("yugioh-data", "raw/2025-05/yugioh_raw_2025-05-22.parquet")
 
     lf = encode_categoricals(lf, ["type", "attribute", "archetype"])
     lf = normalize_numeric_columns(
@@ -157,6 +152,3 @@ if __name__ == "__main__":
     df = add_tfidf_description_features(df)
     print(df.head(5))
     print(df.columns)
-
-    # Cleanup temp file after the script exits
-    atexit.register(lambda: os.remove(tmp_path))
