@@ -100,7 +100,25 @@ def drop_columns(
     return df.drop(cols)
 
 def cats_to_dummies_eager(df : pl.DataFrame) -> pl.DataFrame:
-    pass
+    """
+    Converts all categorical columns in the given Polars DataFrame into one-hot encoded columns.
+
+    Parameters:
+    - df: Polars DataFrame with categorical columns
+
+    Returns:
+    - Polars DataFrame with one-hot encoded columns replacing the original categoricals
+    """
+    cat_cols = [col for col in df.columns if df[col].dtype == pl.Categorical]
+
+    if not cat_cols:
+        return df
+
+    # One-hot encode and combine with non-categorical columns
+    df_non_cat = df.drop(cat_cols)
+    df_dummies = df.select(cat_cols).to_dummies()
+
+    return df_non_cat.hstack(df_dummies)
 
 # may be worth trying out different values of max_features and n_components to view perforomance differences
 def add_tfidf_description_features(df: pl.DataFrame, 
@@ -150,5 +168,6 @@ if __name__ == "__main__":
 
     df = lf.collect()
     df = add_tfidf_description_features(df)
+    df = cats_to_dummies_eager(df)
     print(df.head(5))
     print(df.columns)
