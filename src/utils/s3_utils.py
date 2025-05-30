@@ -1,9 +1,12 @@
 import os
 import logging
 from datetime import datetime
+import io
 
 import boto3
+import s3fs
 from botocore.exceptions import BotoCoreError, ClientError
+import polars as pl
 
 
 def upload_to_s3(
@@ -32,4 +35,25 @@ def upload_to_s3(
         logging.info(f"Successfully uploaded to s3://{bucket}/{key}")
     except (BotoCoreError, ClientError) as e:
         logging.exception(f"Failed to upload to s3://{bucket}/{key}")
+        raise
+
+def read_parquet_from_s3(bucket: str, key: str) -> pl.DataFrame:
+    """
+    Reads a Parquet file from S3 and returns it as a Polars DataFrame.
+
+    Parameters:
+    - bucket: Name of the S3 bucket
+    - key: Key (path) to the Parquet file in S3
+
+    Returns:
+    - Polars DataFrame containing the file's contents
+    """
+    try:
+        logging.info(f"Reading Parquet from s3://{bucket}/{key}")
+        s3 = boto3.client("s3")
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        return pl.read_parquet(io.BytesIO(obj["Body"].read()))
+
+    except (BotoCoreError, ClientError) as e:
+        logging.exception(f"Failed to read s3://{bucket}/{key}")
         raise
