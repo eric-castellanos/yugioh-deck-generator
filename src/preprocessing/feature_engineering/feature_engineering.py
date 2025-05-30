@@ -110,16 +110,20 @@ def cats_to_dummies_eager(df : pl.DataFrame) -> pl.DataFrame:
     Returns:
     - Polars DataFrame with one-hot encoded columns replacing the original categoricals
     """
+    # Identify all categorical columns
     cat_cols = [col for col in df.columns if df[col].dtype == pl.Categorical]
 
-    if not cat_cols:
-        return df
+    # Split: keep 'archetype', drop others
+    cat_cols_to_drop = [col for col in cat_cols if col != "archetype"]
 
-    # One-hot encode and combine with non-categorical columns
-    df_non_cat = df.drop(cat_cols)
+    # One-hot encode all categorical columns (including 'archetype')
     df_dummies = df.select(cat_cols).to_dummies()
 
-    return df_non_cat.hstack(df_dummies)
+    # Drop all categorical cols except 'archetype'
+    df_base = df.drop(cat_cols_to_drop)
+
+    # Combine
+    return df_base.hstack(df_dummies)
 
 # may be worth trying out different values of max_features and n_components to view perforomance differences
 def add_tfidf_description_features(df: pl.DataFrame, 
