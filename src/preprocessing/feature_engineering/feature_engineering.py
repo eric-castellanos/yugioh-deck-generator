@@ -1,12 +1,13 @@
 from typing import List, Union
-import tempfile
-import atexit
-import os
+import io
+from datetime import datetime
 
 import boto3
 import polars as pl
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
+
+from src.utils.s3_utils import upload_to_s3
 
 def read_from_s3(bucket: str, key: str) -> pl.DataFrame:
     s3 = boto3.client("s3")
@@ -169,5 +170,19 @@ if __name__ == "__main__":
     df = lf.collect()
     df = add_tfidf_description_features(df)
     df = cats_to_dummies_eager(df)
-    print(df.head(5))
-    print(df.columns)
+
+    # Write Polars DataFrame to in-memory Parquet buffer
+    buffer = io.BytesIO()
+    df.write_parquet(buffer)
+    buffer.seek(0)
+
+    # Define key and upload
+    month_str = datetime.today().strftime('%Y-%m')
+    s3_key = f"processed/feature_engineered/{month_str}/feature_engineered.parquet"
+
+    upload_to_s3(
+        bucket="yugioh-data",
+        key=s3_key,
+        data=buffer.getvalue(),
+        content_type="application/octet-stream"
+    )
