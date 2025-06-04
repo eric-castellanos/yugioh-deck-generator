@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+    spec:
+      containers:
+        - name: mlflow
+          image: cr.fly.io/mlflow:latest  # You can build your own image if needed
+          ports:
+            - containerPort: 5000
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "http://0.0.0.0:5000"
+            - name: BACKEND_STORE_URI
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-secrets
+                  key: backend_store_uri
+            - name: ARTIFACT_ROOT
+              value: "s3://your-bucket/mlflow-artifacts"
+          volumeMounts:
+            - name: artifact-store
+              mountPath: /mlartifacts
+      volumes:
+        - name: artifact-store
+          emptyDir: {}  # Replace with PVC if needed
