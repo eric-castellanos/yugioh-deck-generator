@@ -85,7 +85,6 @@ jobs:
 
       - name: Configure Terraform
         run: |
-          cd ${{ inputs.source_dir }}
           terraform init
 
           # Create terraform.tfvars
@@ -101,7 +100,7 @@ jobs:
           VPC_ID=$(aws ec2 describe-vpcs --query 'Vpcs[?Tags[?Key==`Environment` && Value==`${{ github.event.inputs.environment }}`]].VpcId' --output text)
           echo "vpc_id = \"${VPC_ID}\"" >> terraform.tfvars
           EOF
-        working-directory: ${{ github.workspace }}
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir }}
 
       - name: Terraform Plan
         if: ${{ github.event.inputs.action == 'plan' }}
