@@ -85,22 +85,23 @@ jobs:
 
       - name: Configure Terraform
         run: |
-          cd ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}
+          cd ${{ inputs.source_dir }}
           terraform init
-          
+
           # Create terraform.tfvars
           cat > terraform.tfvars << EOF
           environment = "${{ github.event.inputs.environment }}"
           cluster_name = "mlflow-cluster-${{ github.event.inputs.environment }}"
-          
+
           # Get subnet IDs from AWS
           SUBNET_IDS=$(aws ec2 describe-subnets --query 'Subnets[?Tags[?Key==`Environment` && Value==`${{ github.event.inputs.environment }}`]].SubnetId' --output text)
           echo "subnet_ids = [${SUBNET_IDS}]" >> terraform.tfvars
-          
+
           # Get VPC ID from AWS
           VPC_ID=$(aws ec2 describe-vpcs --query 'Vpcs[?Tags[?Key==`Environment` && Value==`${{ github.event.inputs.environment }}`]].VpcId' --output text)
           echo "vpc_id = \"${VPC_ID}\"" >> terraform.tfvars
           EOF
+        working-directory: ${{ github.workspace }}
 
       - name: Terraform Plan
         if: ${{ github.event.inputs.action == 'plan' }}
