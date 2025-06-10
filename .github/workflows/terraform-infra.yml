@@ -44,7 +44,9 @@ jobs:
 
       - name: Copy workflow files
         run: |
-          cp -r ${{ inputs.source_dir }}/* ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}/
+          echo "Copying from workflow-source/${{ inputs.source_dir }} to ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}"
+          mkdir -p ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}
+          cp -r workflow-source/${{ inputs.source_dir }}/* ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}/
 
       - name: Setup AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
