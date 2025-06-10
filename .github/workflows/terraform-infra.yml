@@ -42,6 +42,9 @@ env:
 jobs:
   terraform:
     runs-on: ubuntu-latest
+    env:
+      TF_ACTION: ${{ github.event.inputs.action || 'plan' }}
+      TF_SOURCE_DIR: ${{ github.event.inputs.source_dir || 'terraform' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -110,50 +113,47 @@ jobs:
         working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform' }}
 
       - name: Terraform Plan
-        if: ${{ github.event.inputs.action == 'plan' }}
-        run: |
-          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
-          terraform plan -out=tfplan
+        if: ${{ env.TF_ACTION == 'plan' }}
+        run: terraform plan -out=tfplan
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Apply
-        if: ${{ github.event.inputs.action == 'apply' }}
-        run: |
-          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
-          terraform apply -auto-approve tfplan
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: terraform apply -auto-approve tfplan
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Destroy
-        if: ${{ github.event.inputs.action == 'destroy' }}
-        run: |
-          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
-          terraform destroy -auto-approve
+        if: ${{ env.TF_ACTION == 'destroy' }}
+        run: terraform destroy -auto-approve
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Save Terraform State
-        if: ${{ github.event.inputs.action == 'apply' }}
+        if: ${{ env.TF_ACTION == 'apply' }}
         uses: actions/upload-artifact@v4
         with:
           name: terraform-state
-          path: ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}/terraform.tfstate
+          path: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}/terraform.tfstate
 
       - name: Get Outputs
-        if: ${{ github.event.inputs.action == 'apply' }}
+        if: ${{ env.TF_ACTION == 'apply' }}
         run: |
-          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
           terraform output -json > terraform-outputs.json
           cat terraform-outputs.json
         id: get_outputs
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Save Outputs
-        if: ${{ github.event.inputs.action == 'apply' }}
+        if: ${{ env.TF_ACTION == 'apply' }}
         uses: actions/upload-artifact@v4
         with:
           name: terraform-outputs
-          path: ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}/terraform-outputs.json
+          path: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}/terraform-outputs.json
 
       - name: Cleanup
-        if: ${{ github.event.inputs.action == 'destroy' }}
+        if: ${{ env.TF_ACTION == 'destroy' }}
         run: |
-          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
           rm -f terraform.tfstate
           rm -f terraform.tfstate.backup
           rm -f terraform.tfvars
           rm -f terraform-outputs.json
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
