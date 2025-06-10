@@ -1,0 +1,232 @@
+name: MLflow Development Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to take (deploy/cleanup)'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - cleanup
+
+env:
+  KUBECONFIG_PATH: /tmp/kubeconfig
+  AWS_REGION: us-east-1
+  NAMESPACE: mlflow-dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get EKS cluster credentials
+        uses: aws-actions/amazon-eks-authenticator@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          cluster-name: ${{ secrets.EKS_CLUSTER_NAME }}
+          role-arn: ${{ secrets.EKS_CLUSTER_ROLE_ARN }}
+
+      - name: Get EFS ID
+        id: get_efs
+        run: |
+          # Get or create development EFS volume
+          EFS_ID=$(aws efs describe-file-systems --query 'FileSystems[?Name==`mlflow-dev-efs`].FileSystemId' --output text)
+          if [ -z "$EFS_ID" ]; then
+            echo "Creating new EFS volume for development..."
+            aws efs create-file-system \
+              --creation-token mlflow-dev-efs \
+              --encrypted \
+              --performance-mode generalPurpose \
+              --throughput-mode bursting \
+              --tags Key=Name,Value=mlflow-dev-efs
+            sleep 30  # Wait for EFS creation
+            EFS_ID=$(aws efs describe-file-systems --query 'FileSystems[?Name==`mlflow-dev-efs`].FileSystemId' --output text)
+          fi
+          echo "EFS_ID=$EFS_ID" >> $GITHUB_OUTPUT
+
+      - name: Create EFS Mount Target
+        if: ${{ steps.get_efs.outputs.EFS_ID != '' }}
+        run: |
+          # Create mount targets in all AZs
+          SUBNET_IDS=$(aws ec2 describe-subnets --query 'Subnets[*].SubnetId' --output text)
+          for SUBNET_ID in $SUBNET_IDS; do
+            echo "Creating mount target in subnet $SUBNET_ID"
+            aws efs create-mount-target \
+              --file-system-id ${{ steps.get_efs.outputs.EFS_ID }} \
+              --subnet-id $SUBNET_ID \
+              --security-group ${{ secrets.MLFLOW_DEV_SG_ID }}
+          done
+          sleep 10  # Wait for mount targets to be ready
+
+      - name: Create development namespace
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }} || true
+
+      - name: Create Persistent Volume
+        run: |
+          cat > infra/k8s/mlflow/pv-dev.yaml << EOF
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: mlflow-dev-pv
+            namespace: ${{ env.NAMESPACE }}
+            labels:
+              type: efs
+          spec:
+            capacity:
+              storage: 100Gi
+            accessModes:
+              - ReadWriteMany
+            persistentVolumeReclaimPolicy: Retain
+            storageClassName: efs-sc-dev
+            csi:
+              driver: efs.csi.aws.com
+              volumeHandle: ${{ steps.get_efs.outputs.EFS_ID }}
+          EOF
+          kubectl apply -f infra/k8s/mlflow/pv-dev.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+      - name: Deploy MLflow Development
+        run: |
+          # Deploy in order with development-specific configurations
+          kubectl apply -f infra/k8s/mlflow/namespace.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          # Create PVC that uses the persistent volume
+          cat > infra/k8s/mlflow/pvc-dev.yaml << EOF
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: mlflow-dev-pvc
+            namespace: ${{ env.NAMESPACE }}
+            labels:
+              app: mlflow
+              component: artifacts
+          spec:
+            accessModes:
+              - ReadWriteMany
+            resources:
+              requests:
+                storage: 100Gi
+            storageClassName: efs-sc-dev
+            volumeName: mlflow-dev-pv
+          EOF
+          kubectl apply -f infra/k8s/mlflow/pvc-dev.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          # Create secrets with persistent storage paths
+          kubectl create secret generic mlflow-secrets-dev \
+            --from-literal=backend_store_uri="postgresql://mlflow:${{ secrets.DB_PASSWORD }}@${{ secrets.DB_HOST }}:5432/mlflow-dev" \
+            --from-literal=artifact_root="s3://${{ secrets.S3_BUCKET }}/mlflow-dev-artifacts" \
+            --from-literal=aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            --from-literal=aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            --from-literal=persistent_storage_path="efs://mlflow-dev-efs" \
+            -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          cat > infra/k8s/mlflow/storageclass-dev.yaml << EOF
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: efs-sc-dev
+            namespace: ${{ env.NAMESPACE }}
+            labels:
+              app: mlflow
+              component: storage
+          provisioner: efs.csi.aws.com
+          parameters:
+            provisioningMode: efs-ap
+            fileSystemId: ${{ steps.get_efs.outputs.EFS_ID }}
+            directoryPerms: "700"
+            gidRangeStart: "1000"
+            gidRangeEnd: "2000"
+            basePath: "/dynamic-provisioning-dev"
+          reclaimPolicy: Retain
+          volumeBindingMode: Immediate
+          allowVolumeExpansion: true
+          EOF
+
+          kubectl apply -f infra/k8s/mlflow/storageclass-dev.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          kubectl apply -f infra/k8s/mlflow/pvc.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          kubectl apply -f infra/k8s/mlflow/serviceaccount.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          # Create development secrets
+          kubectl create secret generic mlflow-secrets-dev \
+            --from-literal=backend_store_uri="postgresql://mlflow:${{ secrets.DB_PASSWORD }}@${{ secrets.DB_HOST }}:5432/mlflow-dev" \
+            --from-literal=artifact_root="s3://${{ secrets.S3_BUCKET }}/mlflow-dev-artifacts" \
+            --from-literal=aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            --from-literal=aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          kubectl apply -f infra/k8s/mlflow/configmap.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          kubectl apply -f infra/k8s/mlflow/deployment.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+          kubectl apply -f infra/k8s/mlflow/service.yaml -n ${{ env.NAMESPACE }}
+          sleep 2
+
+      - name: Wait for pods to be ready
+        run: |
+          while true; do
+            READY=$(kubectl get pods -n ${{ env.NAMESPACE }} | grep Running | wc -l)
+            if [ "$READY" -ge "2" ]; then
+              break
+            fi
+            sleep 5
+            echo "Waiting for pods to be ready..."
+          done
+
+      - name: Get and print deployment info
+        id: deployment_info
+        run: |
+          EXTERNAL_IP=$(kubectl get svc mlflow-ingress -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "MLflow Development UI: http://$EXTERNAL_IP"
+          echo "API endpoint: http://$EXTERNAL_IP:5000"
+          echo "EXTERNAL_IP=$EXTERNAL_IP" >> $GITHUB_OUTPUT
+
+      - name: Cleanup
+        if: ${{ github.event.inputs.action == 'cleanup' || failure() }}
+        run: |
+          echo "Cleaning up development deployment..."
+          
+          # Delete Kubernetes resources
+          kubectl delete namespace ${{ env.NAMESPACE }} || true
+          
+          # Delete EFS volume if it exists
+          EFS_ID=$(aws efs describe-file-systems --query 'FileSystems[?Name==`mlflow-dev-efs`].FileSystemId' --output text)
+          if [ ! -z "$EFS_ID" ]; then
+            echo "Deleting EFS volume: $EFS_ID"
+            aws efs delete-file-system --file-system-id $EFS_ID
+          fi
+          
+          # Clean up S3 artifacts
+          echo "Cleaning up S3 artifacts..."
+          aws s3 rm s3://${{ secrets.S3_BUCKET }}/mlflow-dev-artifacts --recursive
+          
+          echo "Cleanup complete!"
