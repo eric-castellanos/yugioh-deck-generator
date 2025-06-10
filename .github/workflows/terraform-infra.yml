@@ -42,6 +42,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Create workflow source directory
+        run: |
+          mkdir -p workflow-source/${{ inputs.source_dir }}
+          cp -r ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}/* workflow-source/${{ inputs.source_dir }}/
+
       - name: Copy workflow files
         run: |
           echo "Copying from workflow-source/${{ inputs.source_dir }} to ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}"
