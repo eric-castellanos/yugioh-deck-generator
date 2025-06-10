@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TF_ACTION: ${{ github.event.inputs.action || 'plan' }}
-      TF_SOURCE_DIR: ${{ github.event.inputs.source_dir || 'terraform' }}
+      TF_SOURCE_DIR: ${{ github.event.inputs.source_dir || 'infra/terraform' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
