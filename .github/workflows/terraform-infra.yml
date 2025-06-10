@@ -107,7 +107,7 @@ jobs:
           subnet_ids = [${SUBNET_IDS}]
           vpc_id = "${VPC_ID}"
           EOF
-        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'terraform' }}
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/erraform' }}
 
       - name: Terraform Plan
         if: ${{ github.event.inputs.action == 'plan' }}
