@@ -42,20 +42,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Copy workflow files
+      - name: Copy Terraform files safely
         run: |
-          SOURCE_DIR="${GITHUB_WORKSPACE}/${{ inputs.source_dir }}"
+          # Use dispatch input if available, or fallback to default
+          INPUT_SOURCE_DIR="${{ inputs.source_dir }}"
+          FALLBACK_DIR="infra/terraform"
+
+          if [ -z "$INPUT_SOURCE_DIR" ]; then
+            echo "No input for source_dir detected. Defaulting to: $FALLBACK_DIR"
+            SOURCE_DIR="${GITHUB_WORKSPACE}/$FALLBACK_DIR"
+          else
+            SOURCE_DIR="${GITHUB_WORKSPACE}/$INPUT_SOURCE_DIR"
+          fi
+
           TARGET_DIR="${GITHUB_WORKSPACE}/target-terraform"
 
-          echo "SOURCE: ${SOURCE_DIR}"
-          echo "TARGET: ${TARGET_DIR}"
+          echo "SOURCE: $SOURCE_DIR"
+          echo "TARGET: $TARGET_DIR"
 
-          if [ "${SOURCE_DIR}" != "${TARGET_DIR}" ]; then
-            mkdir -p "${TARGET_DIR}"
-            cp -r "${SOURCE_DIR}/." "${TARGET_DIR}/"
-          else
-            echo "ERROR: source_dir resolves to the current workspace root. Skipping copy."
+          if [ "$SOURCE_DIR" == "$TARGET_DIR" ]; then
+            echo "ERROR: Source and target directories are the same. Aborting."
+            exit 1
           fi
+
+          mkdir -p "$TARGET_DIR"
+          cp -r "$SOURCE_DIR/." "$TARGET_DIR/"
 
       - name: Setup AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
