@@ -46,7 +46,12 @@ jobs:
         run: |
           echo "Copying Terraform files from source directory"
           mkdir -p ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}
+          # Copy only the Terraform files from the source directory
           cp -r ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}/* ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}/
+          # Make sure we have the correct directory structure
+          cd ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}
+          pwd
+          ls -la
 
       - name: Setup AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
