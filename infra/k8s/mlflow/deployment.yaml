@@ -2,8 +2,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mlflow
+  namespace: mlflow
+  labels:
+    app: mlflow
+    component: tracking-server
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: mlflow
@@ -11,12 +15,22 @@ spec:
     metadata:
       labels:
         app: mlflow
+        component: tracking-server
     spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      serviceAccountName: mlflow
       containers:
         - name: mlflow
-          image: cr.fly.io/mlflow:latest  # You can build your own image if needed
+          image: mlflow/mlflow:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
+              name: tracking
+            - containerPort: 80
+              name: http
           env:
             - name: MLFLOW_TRACKING_URI
               value: "http://0.0.0.0:5000"
@@ -26,10 +40,52 @@ spec:
                   name: mlflow-secrets
                   key: backend_store_uri
             - name: ARTIFACT_ROOT
-              value: "s3://your-bucket/mlflow-artifacts"
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-secrets
+                  key: artifact_root
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-secrets
+                  key: aws_access_key_id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-secrets
+                  key: aws_secret_access_key
+            - name: AWS_REGION
+              value: "us-east-1"
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "1000m"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 20
           volumeMounts:
             - name: artifact-store
               mountPath: /mlartifacts
+            - name: config-volume
+              mountPath: /etc/mlflow
       volumes:
         - name: artifact-store
-          emptyDir: {}  # Replace with PVC if needed
+          persistentVolumeClaim:
+            claimName: mlflow-artifacts
+        - name: config-volume
+          configMap:
+            name: mlflow-config
+      imagePullSecrets:
+        - name: regcred

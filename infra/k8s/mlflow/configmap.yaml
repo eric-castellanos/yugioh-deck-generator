@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlflow-config
+  namespace: mlflow
+  labels:
+    app: mlflow
+    component: config
+data:
+  mlflow.conf: |
+    [mlflow]
+    tracking_uri = http://0.0.0.0:5000
+    backend_store_uri = ${BACKEND_STORE_URI}
+    artifact_root = ${ARTIFACT_ROOT}
+    s3_endpoint_url = https://s3.${AWS_REGION}.amazonaws.com
+    aws_access_key_id = ${AWS_ACCESS_KEY_ID}
+    aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
+    aws_region = ${AWS_REGION}
+
+  logging.conf: |
+    [loggers]
+    keys=root,mlflow
+
+    [handlers]
+    keys=console,file
+
+    [formatters]
+    keys=simple
+
+    [logger_root]
+    level=INFO
+    handlers=console
+
+    [logger_mlflow]
+    level=INFO
+    handlers=console,file
+    qualname=mlflow
+    propagate=0
+
+    [handler_console]
+    class=StreamHandler
+    level=INFO
+    formatter=simple
+    args=(sys.stdout,)
+
+    [handler_file]
+    class=FileHandler
+    level=INFO
+    formatter=simple
+    args=('mlflow.log',)
+
+    [formatter_simple]
+    format=%(asctime)s - %(name)s - %(levelname)s - %(message)s
