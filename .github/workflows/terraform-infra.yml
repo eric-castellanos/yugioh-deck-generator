@@ -44,14 +44,17 @@ jobs:
 
       - name: Copy workflow files
         run: |
-          echo "SOURCE: ${GITHUB_WORKSPACE}/${{ inputs.source_dir }}"
-          echo "TARGET: ${GITHUB_WORKSPACE}/target-terraform"
+          SOURCE_DIR="${GITHUB_WORKSPACE}/${{ inputs.source_dir }}"
+          TARGET_DIR="${GITHUB_WORKSPACE}/target-terraform"
 
-          if [ "${{ inputs.source_dir }}" != "." ]; then
-            mkdir -p "${GITHUB_WORKSPACE}/target-terraform"
-            cp -r "${GITHUB_WORKSPACE}/${{ inputs.source_dir }}/." "${GITHUB_WORKSPACE}/target-terraform/"
+          echo "SOURCE: ${SOURCE_DIR}"
+          echo "TARGET: ${TARGET_DIR}"
+
+          if [ "${SOURCE_DIR}" != "${TARGET_DIR}" ]; then
+            mkdir -p "${TARGET_DIR}"
+            cp -r "${SOURCE_DIR}/." "${TARGET_DIR}/"
           else
-            echo "ERROR: source_dir resolves to current working directory. Skipping copy."
+            echo "ERROR: source_dir resolves to the current workspace root. Skipping copy."
           fi
 
       - name: Setup AWS credentials
