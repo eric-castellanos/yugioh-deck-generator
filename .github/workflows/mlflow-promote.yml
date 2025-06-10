@@ -96,18 +96,4 @@ jobs:
               }"
           done
 
-      - name: Send Slack notification
-        if: ${{ success() }}
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          authorName: MLflow Promotion
-          fields: repo,message,commit,author,action,workflow,branch,env
-          slackUsername: github-actions
-          footerIcon: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
-          slackWebhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          text: |
-            Experiment ${{ github.event.inputs.experiment_id }} has been successfully promoted to production!
-            - ${_jq '.name'}
-            - ${_jq '.description'}
-            - ${_jq '.artifact_location'}
+

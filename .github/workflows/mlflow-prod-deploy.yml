@@ -22,6 +22,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get Terraform Outputs
+        id: get_outputs
+        run: |
+          # Get Terraform outputs from state file
+          EKS_ROLE_ARN=$(terraform output -json | jq -r '.eks_mlflow_role_arn.value')
+          EKS_CLUSTER_NAME=$(terraform output -json | jq -r '.cluster_name.value')
+          
+          # Output values for use in subsequent steps
+          echo "EKS_ROLE_ARN=$EKS_ROLE_ARN" >> $GITHUB_OUTPUT
+          echo "EKS_CLUSTER_NAME=$EKS_CLUSTER_NAME" >> $GITHUB_OUTPUT
+
       - name: Setup AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -35,8 +46,8 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
-          cluster-name: ${{ secrets.EKS_CLUSTER_NAME }}
-          role-arn: ${{ secrets.EKS_CLUSTER_ROLE_ARN }}
+          cluster-name: ${{ steps.get_outputs.outputs.EKS_CLUSTER_NAME }}
+          role-arn: ${{ steps.get_outputs.outputs.EKS_ROLE_ARN }}
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v3
@@ -204,17 +215,4 @@ jobs:
           # Check if API endpoint is accessible
           curl -s -f -m 10 "http://${{ steps.deployment_info.outputs.EXTERNAL_IP }}:5000/health" || exit 1
 
-      - name: Send Slack notification
-        if: ${{ success() }}
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ job.status }}
-          authorName: MLflow Deployment
-          fields: repo,message,commit,author,action,workflow,branch,env
-          slackUsername: github-actions
-          footerIcon: https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png
-          slackWebhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          text: |
-            MLflow has been successfully deployed!
-            UI: http://${{ steps.deployment_info.outputs.EXTERNAL_IP }}
-            API: http://${{ steps.deployment_info.outputs.EXTERNAL_IP }}:5000
+

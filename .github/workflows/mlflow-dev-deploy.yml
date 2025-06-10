@@ -28,6 +28,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get Terraform Outputs
+        id: get_outputs
+        run: |
+          # Get Terraform outputs from state file
+          EKS_ROLE_ARN=$(terraform output -json | jq -r '.eks_mlflow_role_arn.value')
+          EKS_CLUSTER_NAME=$(terraform output -json | jq -r '.cluster_name.value')
+          MLFLOW_ROLE_ARN=$(terraform output -json | jq -r '.mlflow_role_arn.value')
+          MLFLOW_INSTANCE_PROFILE_ARN=$(terraform output -json | jq -r '.mlflow_instance_profile_arn.value')
+          
+          # Validate outputs exist
+          if [ -z "$EKS_ROLE_ARN" ] || [ -z "$EKS_CLUSTER_NAME" ] || [ -z "$MLFLOW_ROLE_ARN" ] || [ -z "$MLFLOW_INSTANCE_PROFILE_ARN" ]; then
+            echo "Error: Missing required Terraform outputs"
+            echo "EKS_ROLE_ARN: $EKS_ROLE_ARN"
+            echo "EKS_CLUSTER_NAME: $EKS_CLUSTER_NAME"
+            echo "MLFLOW_ROLE_ARN: $MLFLOW_ROLE_ARN"
+            echo "MLFLOW_INSTANCE_PROFILE_ARN: $MLFLOW_INSTANCE_PROFILE_ARN"
+            exit 1
+          fi
+          
+          # Output values for use in subsequent steps
+          echo "EKS_ROLE_ARN=$EKS_ROLE_ARN" >> $GITHUB_OUTPUT
+          echo "EKS_CLUSTER_NAME=$EKS_CLUSTER_NAME" >> $GITHUB_OUTPUT
+          echo "MLFLOW_ROLE_ARN=$MLFLOW_ROLE_ARN" >> $GITHUB_OUTPUT
+          echo "MLFLOW_INSTANCE_PROFILE_ARN=$MLFLOW_INSTANCE_PROFILE_ARN" >> $GITHUB_OUTPUT
+
       - name: Setup AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -41,26 +66,79 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
-          cluster-name: ${{ secrets.EKS_CLUSTER_NAME }}
-          role-arn: ${{ secrets.EKS_CLUSTER_ROLE_ARN }}
+          cluster-name: ${{ steps.get_outputs.outputs.EKS_CLUSTER_NAME }}
+          role-arn: ${{ steps.get_outputs.outputs.EKS_ROLE_ARN }}
 
-      - name: Get EFS ID
-        id: get_efs
+      - name: Validate IAM roles
         run: |
-          # Get or create development EFS volume
-          EFS_ID=$(aws efs describe-file-systems --query 'FileSystems[?Name==`mlflow-dev-efs`].FileSystemId' --output text)
-          if [ -z "$EFS_ID" ]; then
-            echo "Creating new EFS volume for development..."
-            aws efs create-file-system \
-              --creation-token mlflow-dev-efs \
-              --encrypted \
-              --performance-mode generalPurpose \
-              --throughput-mode bursting \
-              --tags Key=Name,Value=mlflow-dev-efs
-            sleep 30  # Wait for EFS creation
-            EFS_ID=$(aws efs describe-file-systems --query 'FileSystems[?Name==`mlflow-dev-efs`].FileSystemId' --output text)
+          # Validate EKS role
+          eks_role=$(aws iam get-role --role-name ${{ steps.get_outputs.outputs.EKS_ROLE_ARN }} 2>/dev/null || echo "")
+          if [ -z "$eks_role" ]; then
+            echo "Error: EKS role not found"
+            exit 1
           fi
+
+          # Validate MLflow role
+          mlflow_role=$(aws iam get-role --role-name ${{ steps.get_outputs.outputs.MLFLOW_ROLE_ARN }} 2>/dev/null || echo "")
+          if [ -z "$mlflow_role" ]; then
+            echo "Error: MLflow role not found"
+            exit 1
+          fi
+
+          # Validate instance profile
+          instance_profile=$(aws iam get-instance-profile --instance-profile-name ${{ steps.get_outputs.outputs.MLFLOW_INSTANCE_PROFILE_ARN }} 2>/dev/null || echo "")
+          if [ -z "$instance_profile" ]; then
+            echo "Error: Instance profile not found"
+            exit 1
+          fi
+
+          echo "IAM roles validated successfully"
+
+      - name: Get Infrastructure Outputs
+        id: get_infra
+        run: |
+          # Get infrastructure outputs from state file
+          EFS_ID=$(terraform output -json | jq -r '.mlflow_dev_efs_id.value')
+          DB_HOST=$(terraform output -json | jq -r '.mlflow_db_host.value')
+          DB_PASSWORD=$(terraform output -json | jq -r '.mlflow_db_password.value')
+          S3_BUCKET=$(terraform output -json | jq -r '.mlflow_s3_bucket.value')
+          SG_ID=$(terraform output -json | jq -r '.mlflow_dev_sg_id.value')
+          
+          # Output values for use in subsequent steps
           echo "EFS_ID=$EFS_ID" >> $GITHUB_OUTPUT
+          echo "DB_HOST=$DB_HOST" >> $GITHUB_OUTPUT
+          echo "DB_PASSWORD=$DB_PASSWORD" >> $GITHUB_OUTPUT
+          echo "S3_BUCKET=$S3_BUCKET" >> $GITHUB_OUTPUT
+          echo "SG_ID=$SG_ID" >> $GITHUB_OUTPUT
+
+      - name: Create EFS Mount Target
+        if: ${{ steps.get_infra.outputs.EFS_ID != '' }}
+        run: |
+          # Create mount targets in all AZs
+          SUBNET_IDS=$(aws ec2 describe-subnets --query 'Subnets[*].SubnetId' --output text)
+          for SUBNET_ID in $SUBNET_IDS; do
+            echo "Creating mount target in subnet $SUBNET_ID"
+            aws efs create-mount-target \
+              --file-system-id ${{ steps.get_infra.outputs.EFS_ID }} \
+              --subnet-id $SUBNET_ID \
+              --security-group ${{ steps.get_infra.outputs.SG_ID }}
+          done
+          sleep 10  # Wait for mount targets to be ready
+
+      - name: Create Secrets
+        run: |
+          # Create secrets with IAM role information
+          kubectl create secret generic mlflow-secrets-dev \
+            --from-literal=backend_store_uri="postgresql://mlflow:${{ steps.get_infra.outputs.DB_PASSWORD }}@${{ steps.get_infra.outputs.DB_HOST }}:5432/mlflow-dev" \
+            --from-literal=artifact_root="s3://${{ steps.get_infra.outputs.S3_BUCKET }}/mlflow-dev-artifacts" \
+            --from-literal=aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            --from-literal=aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+            --from-literal=persistent_storage_path="efs://${{ steps.get_infra.outputs.EFS_ID }}" \
+            --from-literal=eks_role_arn=${{ steps.get_outputs.outputs.EKS_ROLE_ARN }} \
+            --from-literal=mlflow_role_arn=${{ steps.get_outputs.outputs.MLFLOW_ROLE_ARN }} \
+            --from-literal=mlflow_instance_profile_arn=${{ steps.get_outputs.outputs.MLFLOW_INSTANCE_PROFILE_ARN }} \
+            -n ${{ env.NAMESPACE }}
+          sleep 2
 
       - name: Create EFS Mount Target
         if: ${{ steps.get_efs.outputs.EFS_ID != '' }}
@@ -132,13 +210,18 @@ jobs:
           kubectl apply -f infra/k8s/mlflow/pvc-dev.yaml -n ${{ env.NAMESPACE }}
           sleep 2
 
-          # Create secrets with persistent storage paths
+          - name: Create Secrets
+        run: |
+          # Create secrets with IAM role information
           kubectl create secret generic mlflow-secrets-dev \
             --from-literal=backend_store_uri="postgresql://mlflow:${{ secrets.DB_PASSWORD }}@${{ secrets.DB_HOST }}:5432/mlflow-dev" \
             --from-literal=artifact_root="s3://${{ secrets.S3_BUCKET }}/mlflow-dev-artifacts" \
             --from-literal=aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }} \
             --from-literal=aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
-            --from-literal=persistent_storage_path="efs://mlflow-dev-efs" \
+            --from-literal=persistent_storage_path="efs://${{ steps.get_outputs.outputs.EFS_ID }}" \
+            --from-literal=eks_role_arn=${{ steps.get_outputs.outputs.EKS_ROLE_ARN }} \
+            --from-literal=mlflow_role_arn=${{ steps.get_outputs.outputs.MLFLOW_ROLE_ARN }} \
+            --from-literal=mlflow_instance_profile_arn=${{ steps.get_outputs.outputs.MLFLOW_INSTANCE_PROFILE_ARN }} \
             -n ${{ env.NAMESPACE }}
           sleep 2
 
