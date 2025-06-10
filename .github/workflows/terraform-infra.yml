@@ -20,6 +20,25 @@ on:
         options:
           - dev
           - prod
+      source_branch:
+        description: 'Source branch to get workflow from'
+        required: true
+        default: ${{ github.ref }}
+        type: string
+      source_dir:
+        description: 'Source directory for Terraform files'
+        required: true
+        default: 'infra/terraform'
+        type: string
+  pull_request:
+    branches:
+      - infra/setup_ml_flow
+  push:
+    branches:
+      - infra/setup_ml_flow
+
+env:
+  AWS_REGION: us-east-1
 
 jobs:
   terraform:
@@ -27,6 +46,154 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_branch }}
+          path: workflow-source
+
+      - name: Copy workflow files
+        run: |
+          cp -r workflow-source/${{ github.event.inputs.source_dir }}/* ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}/
+
+      - name: Setup AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.0
+
+      - name: Configure Terraform
+        run: |
+          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
+          terraform init
+          
+          # Create terraform.tfvars
+          cat > terraform.tfvars << EOF
+          environment = "${{ github.event.inputs.environment }}"
+          cluster_name = "mlflow-cluster-${{ github.event.inputs.environment }}"
+          
+          # Get subnet IDs from AWS
+          SUBNET_IDS=$(aws ec2 describe-subnets --query 'Subnets[?Tags[?Key==`Environment` && Value==`${{ github.event.inputs.environment }}`]].SubnetId' --output text)
+          echo "subnet_ids = [${SUBNET_IDS}]" >> terraform.tfvars
+          
+          # Get VPC ID from AWS
+          VPC_ID=$(aws ec2 describe-vpcs --query 'Vpcs[?Tags[?Key==`Environment` && Value==`${{ github.event.inputs.environment }}`]].VpcId' --output text)
+          echo "vpc_id = \"${VPC_ID}\"" >> terraform.tfvars
+          EOF
+
+      - name: Terraform Plan
+        if: ${{ github.event.inputs.action == 'plan' }}
+        run: |
+          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
+          terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        if: ${{ github.event.inputs.action == 'apply' }}
+        run: |
+          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
+          terraform apply -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: ${{ github.event.inputs.action == 'destroy' }}
+        run: |
+          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
+          terraform destroy -auto-approve
+
+      - name: Save Terraform State
+        if: ${{ github.event.inputs.action == 'apply' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-state
+          path: ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}/terraform.tfstate
+
+      - name: Get Outputs
+        if: ${{ github.event.inputs.action == 'apply' }}
+        run: |
+          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
+          terraform output -json > terraform-outputs.json
+          cat terraform-outputs.json
+        id: get_outputs
+
+      - name: Save Outputs
+        if: ${{ github.event.inputs.action == 'apply' }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-outputs
+          path: ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}/terraform-outputs.json
+
+      - name: Cleanup
+        if: ${{ github.event.inputs.action == 'destroy' }}
+        run: |
+          cd ${GITHUB_WORKSPACE}/${{ github.event.inputs.source_dir }}
+          rm -f terraform.tfstate
+          rm -f terraform.tfstate.backup
+          rm -f terraform.tfvars
+          rm -f terraform-outputs.json
+      action:
+        description: 'Action to perform (plan/apply/destroy)'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      environment:
+        description: 'Environment (dev/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+      source_branch:
+        description: 'Source branch to get workflow from'
+        required: true
+        default: ${{ github.ref }}
+        type: string
+      
+      # Add a new input for the source directory
+      source_dir:
+        description: 'Source directory for Terraform files'
+        required: true
+        default: 'infra/terraform'
+        type: string
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflow file
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.source_branch }}
+          path: workflow-source
+
+      - name: Copy workflow files
+        run: |
+          cp -r workflow-source/.github/workflows/* .github/workflows/
+          cp -r workflow-source/infra/terraform/* infra/terraform/
+
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-source
+
+      - name: Copy main branch files
+        run: |
+          cp -r main-source/* .
+          rm -rf .github/workflows/
+          cp -r workflow-source/.github/workflows/* .github/workflows/
+          cp -r workflow-source/infra/terraform/* infra/terraform/
 
       - name: Setup AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
