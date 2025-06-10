@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - infra/setup_ml_flow
   workflow_dispatch:  # Allow manual triggers
 
 env:
