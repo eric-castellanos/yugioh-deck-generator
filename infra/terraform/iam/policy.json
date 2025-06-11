@@ -18,7 +18,7 @@
                 "kms:DescribeKey",
                 "kms:TagResource",
                 "kms:ListAliases",
-                "kms:ListTags"
+                "kms:UpdateAlias"
             ],
             "Resource": "*"
         },

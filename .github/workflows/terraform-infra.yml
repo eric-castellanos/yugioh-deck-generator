@@ -113,8 +113,8 @@ jobs:
           if aws iam get-user --user-name mlflow-user-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.s3.aws_iam_user.mlflow_user mlflow-user-${{ github.event.inputs.environment }}
           fi
-          if aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text | grep -q .; then
-            POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text)
+          POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text)
+          if [ -n "$POLICY_ARN" ]; then
             terraform import module.s3.aws_iam_policy.mlflow_s3_policy $POLICY_ARN
           fi
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster 2>/dev/null; then
@@ -123,7 +123,6 @@ jobs:
           if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
             terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
           fi
-
           terraform state list || echo "No state yet"
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
