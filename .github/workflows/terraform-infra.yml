@@ -382,8 +382,8 @@ jobs:
           region = "${{ env.AWS_REGION }}"
           EOF
           
-          # Initialize and plan
-          terraform init
+          # Initialize and plan with upgrade flag
+          terraform init -upgrade
           terraform plan -out=tfplan
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
