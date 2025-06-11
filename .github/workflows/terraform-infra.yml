@@ -190,12 +190,15 @@ jobs:
                 echo "Found route table: $rt (Main: $is_main)"
                 # Skip the main route table
                 if [[ "$is_main" != "true" ]]; then
-                  # First get and delete all routes except the main route
+                  # First get and delete all routes except the main route and local routes
                   echo "Getting routes for route table: $rt"
-                  aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock]' --output text | while read -r cidr; do
-                    if [[ "$cidr" != "0.0.0.0/0" ]]; then
+                  aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId]' --output text | while read -r cidr gateway_id; do
+                    # Skip the main route (0.0.0.0/0) and local routes (GatewayId starts with 'local')
+                    if [[ "$cidr" != "0.0.0.0/0" && "$gateway_id" != "local" ]]; then
                       echo "Deleting route: $cidr from route table: $rt"
                       aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$cidr"
+                    else
+                      echo "Skipping route: $cidr (Gateway: $gateway_id)"
                     fi
                   done
                   
