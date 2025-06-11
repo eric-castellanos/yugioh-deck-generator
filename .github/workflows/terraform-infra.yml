@@ -259,8 +259,11 @@ jobs:
                   # Delete the route table
                   echo "Deleting route table: $rt"
                   aws ec2 delete-route-table --route-table-id "$rt"
+                else
+                  echo "Skipping invalid route table ID: $rt"
                 fi
               done
+            done
               
               # Delete the VPC
               echo "Deleting VPC: $vpc_id"
