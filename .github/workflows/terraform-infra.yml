@@ -440,7 +440,7 @@ jobs:
           
           if aws kms describe-key --key-id alias/eks/mlflow-cluster-dev 2>/dev/null; then
             echo "Importing existing KMS alias"
-            terraform import 'module.eks.module.kms.aws_kms_alias.this["cluster"]' "alias/eks/mlflow-cluster-dev"
+            terraform import 'module.eks.aws_kms_key.cluster' "alias/eks/mlflow-cluster-dev"
           fi
           
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-dev/cluster 2>/dev/null; then
