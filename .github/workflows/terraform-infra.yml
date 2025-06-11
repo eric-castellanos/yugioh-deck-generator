@@ -188,26 +188,43 @@ jobs:
           ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
           CLUSTER_NAME="mlflow-cluster-${ENVIRONMENT}"
 
-          terraform init
-
+      - name: Configure MLFlow Terraform
+        run: |
           # Create terraform.tfvars using VPC outputs
           cat > terraform.tfvars <<EOF
-          environment = "${ENVIRONMENT}"
-          cluster_name = "${CLUSTER_NAME}"
-          subnet_ids = ${VPC_PUBLIC_SUBNET_IDS}
-          vpc_id = "${VPC_ID}"
+          environment = "${{ github.event.inputs.environment || 'dev' }}"
+          cluster_name = "mlflow-cluster-${{ github.event.inputs.environment || 'dev' }}"
           db_password = "${{ env.DB_PASSWORD }}"
           EOF
-        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform' }}
-
-      - name: Terraform Plan
-        if: ${{ env.TF_ACTION == 'plan' }}
-        run: terraform plan -out=tfplan
+          
+          # Initialize and plan
+          terraform init
+          terraform plan -out=tfplan
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Set VPC Variables
+        run: |
+          # Set VPC variables based on whether we created a new VPC or using existing
+          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
+            echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
+            echo "PUBLIC_SUBNET_IDS=${{ steps.check_vpc.outputs.PUBLIC_SUBNET_IDS }}" >> $GITHUB_ENV
+            echo "PRIVATE_SUBNET_IDS=${{ steps.check_vpc.outputs.PRIVATE_SUBNET_IDS }}" >> $GITHUB_ENV
+          else
+            echo "VPC_ID=${{ steps.vpc_outputs.outputs.VPC_ID }}" >> $GITHUB_ENV
+            echo "PUBLIC_SUBNET_IDS=${{ steps.vpc_outputs.outputs.PUBLIC_SUBNET_IDS }}" >> $GITHUB_ENV
+            echo "PRIVATE_SUBNET_IDS=${{ steps.vpc_outputs.outputs.PRIVATE_SUBNET_IDS }}" >> $GITHUB_ENV
+          fi
+        env:
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
 
       - name: Terraform Apply
         if: ${{ env.TF_ACTION == 'apply' }}
         run: terraform apply -auto-approve tfplan
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Terraform Plan
+        if: ${{ env.TF_ACTION == 'plan' }}
+        run: terraform plan -out=tfplan
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Destroy
