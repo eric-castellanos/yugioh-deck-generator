@@ -127,15 +127,16 @@ jobs:
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Apply
-        if: ${{ env.TF_ACTION == 'apply' }}
         run: |
           terraform init -upgrade
-          terraform plan -out=tfplan
-
+      
           MAX_RETRIES=3
           RETRY_DELAY=10
+      
           for ((i=1; i<=MAX_RETRIES; i++)); do
             echo "Attempt $i of $MAX_RETRIES"
+            terraform plan -out=tfplan
+      
             if terraform apply -auto-approve tfplan; then
               echo "Terraform apply successful"
               break
@@ -153,12 +154,6 @@ jobs:
               fi
             fi
           done
-
-          if [[ $? -ne 0 ]]; then
-            echo "All attempts failed. Please check the logs for details."
-            exit 1
-          fi
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Verify Created Resources
         if: ${{ env.TF_ACTION == 'apply' }}
