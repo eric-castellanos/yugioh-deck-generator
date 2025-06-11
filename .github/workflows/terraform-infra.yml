@@ -471,6 +471,62 @@ jobs:
             echo "All attempts failed. Please check the logs for details."
             exit 1
           fi
+
+      - name: Verify Resources
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: |
+          echo "=== Verifying Resource Creation ==="
+          
+          # Check S3 bucket
+          if aws s3 ls mlflow-backend 2>/dev/null; then
+            echo "✅ S3 bucket exists"
+          else
+            echo "❌ S3 bucket does not exist"
+            exit 1
+          fi
+          
+          # Check IAM user
+          if aws iam get-user --user-name user 2>/dev/null; then
+            echo "✅ IAM user exists"
+          else
+            echo "❌ IAM user does not exist"
+            exit 1
+          fi
+          
+          # Check IAM policy
+          if aws iam get-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access 2>/dev/null; then
+            echo "✅ IAM policy exists"
+          else
+            echo "❌ IAM policy does not exist"
+            exit 1
+          fi
+          
+          # Check KMS alias
+          if aws kms describe-key --key-id alias/eks/mlflow-cluster-dev 2>/dev/null; then
+            echo "✅ KMS alias exists"
+          else
+            echo "❌ KMS alias does not exist"
+            exit 1
+          fi
+          
+          # Check CloudWatch log group
+          if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-dev/cluster 2>/dev/null; then
+            echo "✅ CloudWatch log group exists"
+          else
+            echo "❌ CloudWatch log group does not exist"
+            exit 1
+          fi
+          
+          # Check VPC
+          vpc_id=$(terraform output -json | jq -r '.vpc_id.value')
+          if [[ -n "$vpc_id" && "$vpc_id" =~ ^vpc- ]]; then
+            echo "✅ VPC exists with ID: $vpc_id"
+          else
+            echo "❌ VPC does not exist or invalid ID"
+            exit 1
+          fi
+          
+          echo "=== Resource Verification Complete ==="
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Plan
