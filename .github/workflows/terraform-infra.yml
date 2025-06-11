@@ -412,24 +412,35 @@ jobs:
           terraform import aws_cloudwatch_log_group.eks ${AWS_REGION}_aws_eks_${{ github.event.inputs.environment }}_cluster
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
+      - name: Create Terraform Plan
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: |
+          # Create a plan file
+          terraform plan -out=tfplan
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
       - name: Apply Terraform
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
-          # Check if resources exist and skip creation if they do
+          # Import existing resources if they exist
           if aws s3 ls mlflow-backend 2>/dev/null; then
-            echo "S3 bucket already exists, skipping creation"
+            echo "Importing existing S3 bucket"
+            terraform import module.s3.aws_s3_bucket.mlflow_bucket mlflow-backend
           fi
           
           if aws iam get-user --user-name user 2>/dev/null; then
-            echo "IAM user already exists, skipping creation"
+            echo "Importing existing IAM user"
+            terraform import module.s3.aws_iam_user.mlflow_user user
           fi
           
           if aws iam get-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access 2>/dev/null; then
-            echo "IAM policy already exists, skipping creation"
+            echo "Importing existing IAM policy"
+            terraform import module.s3.aws_iam_policy.mlflow_s3_policy arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access
           fi
           
           if aws kms describe-key --key-id alias/eks/mlflow-cluster-dev 2>/dev/null; then
-            echo "KMS alias already exists, skipping creation"
+            echo "Importing existing KMS alias"
+            terraform import module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] alias/eks/mlflow-cluster-dev
           fi
           
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-dev/cluster 2>/dev/null; then
@@ -450,10 +461,9 @@ jobs:
               echo "Terraform apply failed, retrying in $RETRY_DELAY seconds..."
               sleep $RETRY_DELAY
               
-              # Try to destroy problematic resources
+              # Try to destroy and recreate problematic resources
               if [[ $i -lt $MAX_RETRIES ]]; then
                 echo "Destroying problematic resources..."
-                # Destroy resources in a specific order to handle dependencies
                 terraform destroy -auto-approve \
                   -target="module.vpc.module.vpc.aws_internet_gateway.this[0]" \
                   -target="module.s3.aws_s3_bucket.mlflow_bucket" \
@@ -471,6 +481,7 @@ jobs:
             echo "All attempts failed. Please check the logs for details."
             exit 1
           fi
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Verify Resources
         if: ${{ env.TF_ACTION == 'apply' }}
