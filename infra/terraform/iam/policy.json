@@ -82,13 +82,19 @@
                 "iam:ListRoles",
                 "iam:CreateUser",
                 "iam:TagRole",
+                "iam:PutRolePolicy",
+                "iam:ListRolePolicies",
+                "iam:GetUser",
                 "s3:CreateBucket",
                 "s3:PutObject",
                 "s3:GetObject",
                 "s3:ListBucket",
                 "logs:CreateLogGroup",
                 "logs:CreateLogStream",
-                "logs:PutLogEvents"
+                "logs:PutLogEvents",
+                "logs:TagResource",
+                "rds:CreateDBSubnetGroup",
+                "rds:DescribeDBSubnetGroups"
             ],
             "Resource": "*"
         }
