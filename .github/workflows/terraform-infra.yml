@@ -183,7 +183,7 @@ jobs:
             aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].RouteTableId' --output text | while read -r rt; do
               echo "Found route table: $rt"
               
-              # Handle if it's the main route table
+              # Check if it's the main route table
               main_assoc=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableAssociationId' --output text)
               if [[ -n "$main_assoc" ]]; then
                 echo "Route table $rt is main, creating temporary replacement..."
