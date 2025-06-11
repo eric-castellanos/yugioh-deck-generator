@@ -148,11 +148,35 @@ jobs:
           aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId]' --output text | while read -r vpc_id; do
             echo "Found VPC: $vpc_id"
             
-            # Delete all subnets
+            # Delete all subnets with dependency handling
+            echo "Getting subnets for VPC: $vpc_id"
             subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[*].[SubnetId]' --output text)
-            for subnet in $subnets; do
-              echo "Deleting subnet: $subnet"
-              aws ec2 delete-subnet --subnet-id "$subnet"
+            
+            # Split the subnet IDs by tabs and process each one
+            IFS=$'\t' read -r -a subnet_ids <<< "$subnets"
+            for subnet in "${subnet_ids[@]}"; do
+              if [[ -n "$subnet" && "$subnet" =~ ^subnet- ]]; then
+                echo "Processing subnet: $subnet"
+                
+                # First check for dependencies
+                dependencies=$(aws ec2 describe-subnets --subnet-ids "$subnet" --query 'Subnets[0].{Instances:Instances,NetworkInterfaces:NetworkInterfaces}' --output json)
+                if [[ -n "$dependencies" ]]; then
+                  echo "Found dependencies for subnet $subnet: $dependencies"
+                  
+                  # Wait for dependencies to be cleaned up
+                  echo "Waiting for dependencies to be cleaned up..."
+                  sleep 5
+                  
+                  # Try deleting again
+                  echo "Attempting to delete subnet: $subnet"
+                  aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted (dependencies may still exist)"
+                else
+                  echo "No dependencies found, deleting subnet: $subnet"
+                  aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted"
+                fi
+              else
+                echo "Skipping invalid subnet ID: $subnet"
+              fi
             done
             
             # Delete non-default security groups
