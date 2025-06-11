@@ -438,11 +438,6 @@ jobs:
             terraform import module.s3.aws_iam_policy.mlflow_s3_policy arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access
           fi
           
-          if aws kms describe-key --key-id alias/eks/mlflow-cluster-dev 2>/dev/null; then
-            echo "Importing existing KMS alias"
-            terraform import 'module.eks.aws_kms_alias.cluster' "alias/eks/mlflow-cluster-dev"
-          fi
-          
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-dev/cluster 2>/dev/null; then
             echo "Importing existing CloudWatch log group"
             terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-dev/cluster

@@ -9,6 +9,9 @@ module "eks" {
 
   enable_irsa     = true
 
+  create_kms_key = true
+  enable_cluster_encryption_config = true
+
   eks_managed_node_groups = {
     default_node_group = {
       desired_size = 2
