@@ -29,3 +29,15 @@
 # Python
 *.py[cod]
 __pycache__/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.tfvars
+.terragrunt-cache/
+*.tfplan
+*.tfplan.*
+*.tfbackup
