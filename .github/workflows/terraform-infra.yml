@@ -154,6 +154,7 @@ jobs:
               fi
             fi
           done
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Verify Created Resources
         if: ${{ env.TF_ACTION == 'apply' }}
