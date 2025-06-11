@@ -12,7 +12,6 @@ variable "bucket_name" {
 variable "mlflow_user" {
   type = string
   description = "username for signing into MLFlow"
-  default = "mlflow-user-${var.environment}"
 }
 
 variable "environment" {

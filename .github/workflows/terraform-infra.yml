@@ -381,6 +381,7 @@ jobs:
           db_password = "${{ env.DB_PASSWORD }}"
           region = "${{ env.AWS_REGION }}"
           bucket_name = "mlflow-backend-${{ github.event.inputs.environment || 'dev' }}"
+          mlflow_user = "mlflow-user-${{ github.event.inputs.environment || 'dev' }}"
           EOF
           
           # Initialize and plan with upgrade flag
