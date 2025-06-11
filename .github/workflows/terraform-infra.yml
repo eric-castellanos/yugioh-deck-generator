@@ -450,16 +450,18 @@ jobs:
               echo "Terraform apply failed, retrying in $RETRY_DELAY seconds..."
               sleep $RETRY_DELAY
               
-              # Try to destroy and recreate problematic resources
+              # Try to destroy problematic resources
               if [[ $i -lt $MAX_RETRIES ]]; then
                 echo "Destroying problematic resources..."
+                # Destroy resources in a specific order to handle dependencies
                 terraform destroy -auto-approve \
-                  -target=module.s3.aws_s3_bucket.mlflow_bucket \
-                  -target=module.s3.aws_iam_user.mlflow_user \
-                  -target=module.s3.aws_iam_policy.mlflow_s3_policy \
-                  -target=module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] \
-                  -target=module.eks.module.eks.aws_cloudwatch_log_group.this[0] \
-                  -target=module.vpc.module.vpc.aws_internet_gateway.this[0]
+                  -target="module.vpc.module.vpc.aws_internet_gateway.this[0]" \
+                  -target="module.s3.aws_s3_bucket.mlflow_bucket" \
+                  -target="module.s3.aws_iam_user.mlflow_user" \
+                  -target="module.s3.aws_iam_policy.mlflow_s3_policy" \
+                  -target="module.eks.module.eks.aws_cloudwatch_log_group.this[0]" \
+                  -target="module.eks.module.eks.module.kms.aws_kms_alias.this[0]" \
+                  || echo "Warning: Some resources could not be destroyed, continuing..."
               fi
             fi
           done
