@@ -173,15 +173,6 @@ jobs:
           echo "PRIVATE_SUBNET_IDS=$(echo $outputs | jq -r '.private_subnets.value | @json')" >> $GITHUB_OUTPUT
         working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
 
-      - name: Get VPC Outputs
-        id: get_vpc_outputs
-        run: |
-          outputs=$(terraform output -json)
-          echo "VPC_ID=$(echo $outputs | jq -r '.vpc_id.value')" >> $GITHUB_OUTPUT
-          echo "PUBLIC_SUBNET_IDS=$(echo $outputs | jq -r '.public_subnets.value | @json')" >> $GITHUB_OUTPUT
-          echo "PRIVATE_SUBNET_IDS=$(echo $outputs | jq -r '.private_subnets.value | @json')" >> $GITHUB_OUTPUT
-        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
-
       - name: Configure MLFlow Terraform
         run: |
           # Set fallback values if inputs are not defined (non-manual runs)
