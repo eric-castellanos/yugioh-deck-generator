@@ -145,135 +145,131 @@ jobs:
         run: |
           echo "Checking VPC limits and cleaning up..."
           
+          # Get all VPCs and process each one
           aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId]' --output text | while read -r vpc_id; do
-            echo "Found VPC: $vpc_id"
-            
-            # Delete all subnets with dependency handling
-            echo "Getting subnets for VPC: $vpc_id"
-            subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[*].[SubnetId]' --output text)
-            
-            # Split the subnet IDs by tabs and process each one
-            IFS=$'\t' read -r -a subnet_ids <<< "$subnets"
-            for subnet in "${subnet_ids[@]}"; do
-              if [[ -n "$subnet" && "$subnet" =~ ^subnet- ]]; then
-                echo "Processing subnet: $subnet"
-                
-                # First check for dependencies
-                dependencies=$(aws ec2 describe-subnets --subnet-ids "$subnet" --query 'Subnets[0] | {Instances:Instances[*].InstanceId, NetworkInterfaces:NetworkInterfaces[*].NetworkInterfaceId, NatGateways:NatGateways[*].NatGatewayId}' --output json)
-                if [[ -n "$dependencies" ]]; then
-                  echo "Found dependencies for subnet $subnet: $dependencies"
+            if [[ -n "$vpc_id" && "$vpc_id" =~ ^vpc- ]]; then
+              echo "Found VPC: $vpc_id"
+              
+              # Delete all subnets with dependency handling
+              echo "Getting subnets for VPC: $vpc_id"
+              subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[*].[SubnetId]' --output text)
+              
+              # Split the subnet IDs by tabs and process each one
+              IFS=$'\t' read -r -a subnet_ids <<< "$subnets"
+              for subnet in "${subnet_ids[@]}"; do
+                if [[ -n "$subnet" && "$subnet" =~ ^subnet- ]]; then
+                  echo "Processing subnet: $subnet"
                   
-                  # Handle instances
-                  if [[ -n "$(echo "$dependencies" | jq -r '.Instances | select(length > 0)')" ]]; then
-                    echo "Found instances in subnet $subnet"
-                    # Wait longer for instances to terminate
-                    echo "Waiting 30 seconds for instances to terminate..."
-                    sleep 30
-                  fi
-                  
-                  # Handle network interfaces
-                  if [[ -n "$(echo "$dependencies" | jq -r '.NetworkInterfaces | select(length > 0)')" ]]; then
-                    echo "Found network interfaces in subnet $subnet"
-                    # Try to delete network interfaces
-                    for ni in $(echo "$dependencies" | jq -r '.NetworkInterfaces[]'); do
-                      echo "Deleting network interface: $ni"
-                      aws ec2 delete-network-interface --network-interface-id "$ni" || echo "Could not delete network interface $ni"
-                    done
-                  fi
-                  
-                  # Handle NAT gateways
-                  if [[ -n "$(echo "$dependencies" | jq -r '.NatGateways | select(length > 0)')" ]]; then
-                    echo "Found NAT gateways in subnet $subnet"
-                    # Delete NAT gateways
-                    for ng in $(echo "$dependencies" | jq -r '.NatGateways[]'); do
-                      echo "Deleting NAT gateway: $ng"
-                      aws ec2 delete-nat-gateway --nat-gateway-id "$ng" || echo "Could not delete NAT gateway $ng"
-                    done
-                  fi
-                  
-                  # Try deleting subnet after handling dependencies
-                  echo "Attempting to delete subnet: $subnet"
-                  aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted (dependencies may still exist)"
-                else
-                  echo "No dependencies found, deleting subnet: $subnet"
-                  aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted"
-                fi
-              else
-                echo "Skipping invalid subnet ID: $subnet"
-              fi
-            done
-            
-            # Wait a bit after subnet cleanup
-            echo "Waiting 10 seconds after subnet cleanup..."
-            sleep 10
-            
-            # Delete non-default security groups with dependency handling
-            echo "Getting security groups for VPC: $vpc_id"
-            # Delete non-default security groups
-            echo "Getting security groups for VPC: $vpc_id"
-            aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query 'SecurityGroups[*].[GroupId,GroupName]' --output text | while read -r sg name; do
-              if [[ -n "$sg" && "$sg" =~ ^sg- ]]; then
-                echo "Processing security group: $sg ($name)"
-                
-                if [[ "$name" != "default" ]]; then
-                  # Try to delete the security group
-                  echo "Deleting security group: $sg"
-                  aws ec2 delete-security-group --group-id "$sg" || echo "Security group $sg could not be deleted (dependencies may still exist)"
-                else
-                  echo "Skipping default security group: $sg"
-                fi
-              fi
-            done
-            
-            # Delete internet gateways
-            igs=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query 'InternetGateways[*].[InternetGatewayId]' --output text)
-            for ig in $igs; do
-              echo "Detaching internet gateway: $ig"
-              aws ec2 detach-internet-gateway --internet-gateway-id "$ig" --vpc-id "$vpc_id"
-              echo "Deleting internet gateway: $ig"
-              aws ec2 delete-internet-gateway --internet-gateway-id "$ig"
-            done
-            
-            # Route tables cleanup
-            echo "Getting route tables for VPC: $vpc_id"
-            # First get all route table IDs
-            route_tables=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].RouteTableId' --output text)
-            
-            # Split the route table IDs by tabs and process each one
-            IFS=$'\t' read -r -a rt_ids <<< "$route_tables"
-            for rt in "${rt_ids[@]}"; do
-              if [[ -n "$rt" && "$rt" =~ ^rtb- ]]; then
-                echo "Processing route table: $rt"
-                
-                # Check if it's the main route table
-                main_assoc=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableAssociationId' --output text)
-                if [[ -n "$main_assoc" ]]; then
-                  echo "Route table $rt is main, creating temporary replacement..."
-                  new_rt_id=$(aws ec2 create-route-table --vpc-id "$vpc_id" --query 'RouteTable.RouteTableId' --output text)
-                  aws ec2 replace-route-table-association --association-id "$main_assoc" --route-table-id "$new_rt_id"
-                  echo "Main route table replaced with $new_rt_id"
-                fi
-                
-                # Delete all non-local routes
-                aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId]' --output text | while read -r cidr gateway_id; do
-                  if [[ "$gateway_id" != "local" && -n "$gateway_id" ]]; then
-                    echo "Deleting route: $cidr from route table: $rt"
-                    aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$cidr"
+                  # First check for dependencies
+                  dependencies=$(aws ec2 describe-subnets --subnet-ids "$subnet" --query 'Subnets[0] | {Instances:Instances[*].InstanceId, NetworkInterfaces:NetworkInterfaces[*].NetworkInterfaceId, NatGateways:NatGateways[*].NatGatewayId}' --output json)
+                  if [[ -n "$dependencies" ]]; then
+                    echo "Found dependencies for subnet $subnet: $dependencies"
+                    
+                    # Handle instances
+                    if [[ -n "$(echo "$dependencies" | jq -r '.Instances | select(length > 0)')" ]]; then
+                      echo "Found instances in subnet $subnet"
+                      # Wait longer for instances to terminate
+                      echo "Waiting 30 seconds for instances to terminate..."
+                      sleep 30
+                    fi
+                    
+                    # Handle network interfaces
+                    if [[ -n "$(echo "$dependencies" | jq -r '.NetworkInterfaces | select(length > 0)')" ]]; then
+                      echo "Found network interfaces in subnet $subnet"
+                      # Try to delete network interfaces
+                      for ni in $(echo "$dependencies" | jq -r '.NetworkInterfaces[]'); do
+                        echo "Deleting network interface: $ni"
+                        aws ec2 delete-network-interface --network-interface-id "$ni" || echo "Could not delete network interface $ni"
+                      done
+                    fi
+                    
+                    # Handle NAT gateways
+                    if [[ -n "$(echo "$dependencies" | jq -r '.NatGateways | select(length > 0)')" ]]; then
+                      echo "Found NAT gateways in subnet $subnet"
+                      # Delete NAT gateways
+                      for ng in $(echo "$dependencies" | jq -r '.NatGateways[]'); do
+                        echo "Deleting NAT gateway: $ng"
+                        aws ec2 delete-nat-gateway --nat-gateway-id "$ng" || echo "Could not delete NAT gateway $ng"
+                      done
+                    fi
+                    
+                    # Try deleting subnet after handling dependencies
+                    echo "Attempting to delete subnet: $subnet"
+                    aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted (dependencies may still exist)"
                   else
-                    echo "Skipping route: $cidr (Gateway: $gateway_id)"
+                    echo "No dependencies found, deleting subnet: $subnet"
+                    aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted"
                   fi
-                done
-                
-                # Disassociate all non-main associations
-                aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`false`].RouteTableAssociationId' --output text | while read -r assoc_id; do
-                  if [[ -n "$assoc_id" ]]; then
-                    echo "Disassociating route table: $rt (Assoc ID: $assoc_id)"
-                    aws ec2 disassociate-route-table --association-id "$assoc_id"
+                else
+                  echo "Skipping invalid subnet ID: $subnet"
+                fi
+              done
+              
+              # Wait a bit after subnet cleanup
+              echo "Waiting 10 seconds after subnet cleanup..."
+              sleep 10
+              
+              # Delete non-default security groups
+              echo "Getting security groups for VPC: $vpc_id"
+              aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query 'SecurityGroups[*].[GroupId,GroupName]' --output text | while read -r sg name; do
+                if [[ -n "$sg" && "$sg" =~ ^sg- ]]; then
+                  echo "Processing security group: $sg ($name)"
+                  
+                  if [[ "$name" != "default" ]]; then
+                    # Try to delete the security group
+                    echo "Deleting security group: $sg"
+                    aws ec2 delete-security-group --group-id "$sg" || echo "Security group $sg could not be deleted (dependencies may still exist)"
+                  else
+                    echo "Skipping default security group: $sg"
                   fi
-                done
-                
-                echo "Deleting route table: $rt"
-                aws ec2 delete-route-table --route-table-id "$rt" || echo "Route table $rt could not be deleted (may still be associated)."
+                fi
+              done
+              
+              # Get route tables and process each one
+              echo "Getting route tables for VPC: $vpc_id"
+              aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].[RouteTableId]' --output text | while read -r rt; do
+                if [[ -n "$rt" && "$rt" =~ ^rtb- ]]; then
+                  echo "Processing route table: $rt"
+                  
+                  # Check if it's the main route table
+                  main_rt=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableId' --output text)
+                  if [[ -n "$main_rt" && "$main_rt" == "$rt" ]]; then
+                    echo "Route table $rt is main, creating temporary replacement..."
+                    
+                    # Create a temporary route table
+                    temp_rt=$(aws ec2 create-route-table --vpc-id "$vpc_id" --query 'RouteTable.RouteTableId' --output text)
+                    
+                    # Get the main route table association
+                    main_assoc_id=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableAssociationId' --output text)
+                    
+                    # Replace the main route table association
+                    aws ec2 replace-route-table-association --association-id "$main_assoc_id" --route-table-id "$temp_rt"
+                    
+                    echo "Main route table replaced with $temp_rt"
+                  fi
+                  
+                  # Delete non-local routes
+                  aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[?GatewayId!=`local`].[DestinationCidrBlock,GatewayId]' --output text | while read -r dest gw; do
+                    if [[ -n "$dest" && -n "$gw" ]]; then
+                      echo "Deleting route: $dest (Gateway: $gw) from route table: $rt"
+                      aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$dest"
+                    fi
+                  done
+                  
+                  # Delete the route table
+                  echo "Deleting route table: $rt"
+                  aws ec2 delete-route-table --route-table-id "$rt"
+                fi
+              done
+              
+              # Delete the VPC
+              echo "Deleting VPC: $vpc_id"
+              aws ec2 delete-vpc --vpc-id "$vpc_id" || echo "VPC $vpc_id could not be deleted (dependencies may still exist)"
+              
+              # Wait a bit after VPC deletion
+              echo "Waiting 10 seconds after VPC deletion..."
+              sleep 10
+            fi
               else
                 echo "Skipping invalid route table ID: $rt"
               fi
