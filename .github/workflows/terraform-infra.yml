@@ -6,7 +6,7 @@ on:
       recreate:
         description: 'Recreate existing resources if they exist'
         required: false
-        default: 'false'
+        default: false
         type: boolean
       action:
         description: 'Action to perform (plan/apply/destroy)'
@@ -433,18 +433,42 @@ jobs:
           fi
           
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-dev/cluster 2>/dev/null; then
-            echo "CloudWatch log group already exists, skipping creation"
+            echo "Importing existing CloudWatch log group"
+            terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-dev/cluster
           fi
           
-          # Apply Terraform with replace flags
-          terraform apply -auto-approve \
-            -replace=module.rds.aws_db_subnet_group.mlflow \
-            -replace=module.s3.aws_s3_bucket.mlflow_bucket \
-            -replace=module.s3.aws_iam_user.mlflow_user \
-            -replace=module.s3.aws_iam_policy.mlflow_s3_policy \
-            -replace=module.eks.module.eks.aws_cloudwatch_log_group.this[0] \
-            -replace=module.eks.module.eks.aws_iam_policy.cluster_encryption[0] \
-            -replace=module.vpc.module.vpc.aws_internet_gateway.this[0] tfplan
+          # Apply Terraform with retry logic for resource recreation
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          
+          for ((i=1; i<=MAX_RETRIES; i++)); do
+            echo "Attempt $i of $MAX_RETRIES"
+            if terraform apply -auto-approve tfplan; then
+              echo "Terraform apply successful"
+              break
+            else
+              echo "Terraform apply failed, retrying in $RETRY_DELAY seconds..."
+              sleep $RETRY_DELAY
+              
+              # Try to destroy and recreate problematic resources
+              if [[ $i -lt $MAX_RETRIES ]]; then
+                echo "Destroying problematic resources..."
+                terraform destroy -auto-approve \
+                  -target=module.s3.aws_s3_bucket.mlflow_bucket \
+                  -target=module.s3.aws_iam_user.mlflow_user \
+                  -target=module.s3.aws_iam_policy.mlflow_s3_policy \
+                  -target=module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] \
+                  -target=module.eks.module.eks.aws_cloudwatch_log_group.this[0] \
+                  -target=module.vpc.module.vpc.aws_internet_gateway.this[0]
+              fi
+            fi
+          done
+          
+          # If all retries failed, fail the build
+          if [[ $? -ne 0 ]]; then
+            echo "All attempts failed. Please check the logs for details."
+            exit 1
+          fi
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Plan
