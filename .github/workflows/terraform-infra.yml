@@ -305,9 +305,9 @@ jobs:
           # Set environment variables
           ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
           
-          # Initialize Terraform
-          echo "Initializing Terraform..."
-          terraform init
+          # Initialize Terraform with upgrade flag
+          echo "Initializing Terraform with upgrade flag..."
+          terraform init -upgrade
           
           # Check for existing state
           if [[ -f terraform.tfstate ]]; then
