@@ -7,7 +7,6 @@ variable "region" {
 variable "bucket_name" {
   type = string
   description = "S3 bucket where backend info/data is stored."
-  default = "mlflow-backend-${var.environment}"
 }
 
 variable "mlflow_user" {
