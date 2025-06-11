@@ -1,0 +1,217 @@
+name: MLflow Deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  KUBECONFIG_PATH: /tmp/kubeconfig
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get Terraform Outputs
+        id: get_outputs
+        run: |
+          # Get Terraform outputs from state file
+          EKS_ROLE_ARN=$(terraform output -json | jq -r '.eks_mlflow_role_arn.value')
+          EKS_CLUSTER_NAME=$(terraform output -json | jq -r '.cluster_name.value')
+          
+          # Output values for use in subsequent steps
+          echo "EKS_ROLE_ARN=$EKS_ROLE_ARN" >> $GITHUB_OUTPUT
+          echo "EKS_CLUSTER_NAME=$EKS_CLUSTER_NAME" >> $GITHUB_OUTPUT
+
+      - name: Setup AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get EKS cluster credentials
+        uses: aws-actions/amazon-eks-authenticator@v1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+          cluster-name: ${{ steps.get_outputs.outputs.EKS_CLUSTER_NAME }}
+          role-arn: ${{ steps.get_outputs.outputs.EKS_ROLE_ARN }}
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: latest
+
+      - name: Get EFS ID
+        id: get_efs
+        run: |
+          # Get or create production EFS volume
+          EFS_ID=$(aws efs describe-file-systems --query 'FileSystems[?Name==`mlflow-efs`].FileSystemId' --output text)
+          if [ -z "$EFS_ID" ]; then
+            echo "Creating new EFS volume for production..."
+            aws efs create-file-system \
+              --creation-token mlflow-efs \
+              --encrypted \
+              --performance-mode generalPurpose \
+              --throughput-mode provisioned \
+              --provisioned-throughput-in-mibps 100 \
+              --tags Key=Name,Value=mlflow-efs \
+              Key=Environment,Value=production
+            sleep 30  # Wait for EFS creation
+            EFS_ID=$(aws efs describe-file-systems --query 'FileSystems[?Name==`mlflow-efs`].FileSystemId' --output text)
+          fi
+          echo "EFS_ID=$EFS_ID" >> $GITHUB_OUTPUT
+
+      - name: Create EFS Mount Target
+        if: ${{ steps.get_efs.outputs.EFS_ID != '' }}
+        run: |
+          # Create mount targets in all AZs with production security group
+          SUBNET_IDS=$(aws ec2 describe-subnets --query 'Subnets[*].SubnetId' --output text)
+          for SUBNET_ID in $SUBNET_IDS; do
+            echo "Creating mount target in subnet $SUBNET_ID"
+            aws efs create-mount-target \
+              --file-system-id ${{ steps.get_efs.outputs.EFS_ID }} \
+              --subnet-id $SUBNET_ID \
+              --security-group ${{ secrets.MLFLOW_PROD_SG_ID }}
+          done
+          sleep 10  # Wait for mount targets to be ready
+
+      - name: Create Persistent Volume
+        run: |
+          cat > infra/k8s/mlflow/pv-prod.yaml << EOF
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: mlflow-prod-pv
+            namespace: mlflow
+            labels:
+              type: efs
+              environment: production
+          spec:
+            capacity:
+              storage: 500Gi
+            accessModes:
+              - ReadWriteMany
+            persistentVolumeReclaimPolicy: Retain
+            storageClassName: efs-sc-prod
+            csi:
+              driver: efs.csi.aws.com
+              volumeHandle: ${{ steps.get_efs.outputs.EFS_ID }}
+          EOF
+          kubectl apply -f infra/k8s/mlflow/pv-prod.yaml
+          sleep 2
+
+      - name: Create Persistent Volume Claim
+        run: |
+          cat > infra/k8s/mlflow/pvc-prod.yaml << EOF
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: mlflow-prod-pvc
+            namespace: mlflow
+            labels:
+              app: mlflow
+              component: artifacts
+              environment: production
+          spec:
+            accessModes:
+              - ReadWriteMany
+            resources:
+              requests:
+                storage: 500Gi
+            storageClassName: efs-sc-prod
+            volumeName: mlflow-prod-pv
+          EOF
+          kubectl apply -f infra/k8s/mlflow/pvc-prod.yaml
+          sleep 2
+
+      - name: Create Storage Class
+        run: |
+          cat > infra/k8s/mlflow/storageclass-prod.yaml << EOF
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: efs-sc-prod
+            namespace: mlflow
+            labels:
+              app: mlflow
+              component: storage
+              environment: production
+          provisioner: efs.csi.aws.com
+          parameters:
+            provisioningMode: efs-ap
+            fileSystemId: ${{ steps.get_efs.outputs.EFS_ID }}
+            directoryPerms: "700"
+            gidRangeStart: "1000"
+            gidRangeEnd: "2000"
+            basePath: "/dynamic-provisioning"
+          reclaimPolicy: Retain
+          volumeBindingMode: Immediate
+          allowVolumeExpansion: true
+          EOF
+
+      - name: Deploy MLflow
+        run: |
+          # Deploy in order
+          kubectl apply -f infra/k8s/mlflow/namespace.yaml
+          sleep 5
+
+          kubectl apply -f infra/k8s/mlflow/storageclass.yaml
+          sleep 5
+
+          kubectl apply -f infra/k8s/mlflow/pvc.yaml
+          sleep 5
+
+          kubectl apply -f infra/k8s/mlflow/serviceaccount.yaml
+          sleep 5
+
+          kubectl apply -f infra/k8s/mlflow/secrets.yaml
+          sleep 5
+
+          kubectl apply -f infra/k8s/mlflow/configmap.yaml
+          sleep 5
+
+          kubectl apply -f infra/k8s/mlflow/deployment.yaml
+          sleep 5
+
+          kubectl apply -f infra/k8s/mlflow/service.yaml
+          sleep 5
+
+      - name: Wait for pods to be ready
+        run: |
+          while true; do
+            READY=$(kubectl get pods -n mlflow | grep Running | wc -l)
+            if [ "$READY" -ge "2" ]; then
+              break
+            fi
+            sleep 5
+            echo "Waiting for pods to be ready..."
+          done
+
+      - name: Get and print deployment info
+        id: deployment_info
+        run: |
+          EXTERNAL_IP=$(kubectl get svc mlflow-ingress -n mlflow -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "MLflow UI: http://$EXTERNAL_IP"
+          echo "API endpoint: http://$EXTERNAL_IP:5000"
+          echo "EXTERNAL_IP=$EXTERNAL_IP" >> $GITHUB_OUTPUT
+
+      - name: Validate deployment
+        run: |
+          # Check if MLflow UI is accessible
+          curl -s -f -m 10 "http://${{ steps.deployment_info.outputs.EXTERNAL_IP }}" || exit 1
+          # Check if API endpoint is accessible
+          curl -s -f -m 10 "http://${{ steps.deployment_info.outputs.EXTERNAL_IP }}:5000/health" || exit 1
+
+

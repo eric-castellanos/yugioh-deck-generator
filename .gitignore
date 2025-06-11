@@ -20,6 +20,12 @@
 .env
 /.venv/
 
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate*
+*.tfstate*
+
 # Project
 /docs/*
 /mlruns/*
@@ -29,3 +35,4 @@
 # Python
 *.py[cod]
 __pycache__/
+

@@ -1,0 +1,38 @@
+# terraform/main.tf - Root module to orchestrate all child modules
+
+module "vpc" {
+  source = "./vpc"
+}
+
+module "s3" {
+  source = "./s3"
+  region = var.region
+}
+
+module "rds" {
+  source      = "./rds"
+  vpc_id      = module.vpc.vpc_id
+  subnet_ids  = module.vpc.private_subnet_ids
+  db_password = var.db_password
+  region      = var.region
+}
+
+module "eks" {
+  source            = "./eks"
+  cluster_name      = var.cluster_name
+  cluster_version   = var.cluster_version
+  vpc_id            = module.vpc.vpc_id
+  subnet_ids        = module.vpc.private_subnet_ids
+}
+
+output "mlflow_db_endpoint" {
+  value = module.rds.mlflow_db_endpoint
+}
+
+output "mlflow_bucket_name" {
+  value = module.s3.mlflow_bucket_name
+}
+
+output "eks_cluster_name" {
+  value = module.eks.cluster_name
+}

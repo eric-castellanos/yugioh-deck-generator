@@ -1,0 +1,265 @@
+name: Terraform Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform (plan/apply/destroy)'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      environment:
+        description: 'Environment (dev/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+      source_dir:
+        description: 'Source directory for Terraform files'
+        required: true
+        default: 'infra/terraform'
+        type: string
+  pull_request:
+    branches:
+      - infra/setup_ml_flow
+  push:
+    branches:
+      - infra/setup_ml_flow
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    env:
+      TF_ACTION: ${{ github.event.inputs.action || 'plan' }}
+      TF_SOURCE_DIR: ${{ github.event.inputs.source_dir || 'infra/terraform' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Copy Terraform files safely
+        run: |
+          # Use dispatch input if available, or fallback to default
+          INPUT_SOURCE_DIR="${{ inputs.source_dir }}"
+          FALLBACK_DIR="infra/terraform"
+
+          if [ -z "$INPUT_SOURCE_DIR" ]; then
+            echo "No input for source_dir detected. Defaulting to: $FALLBACK_DIR"
+            SOURCE_DIR="${GITHUB_WORKSPACE}/$FALLBACK_DIR"
+          else
+            SOURCE_DIR="${GITHUB_WORKSPACE}/$INPUT_SOURCE_DIR"
+          fi
+
+          TARGET_DIR="${GITHUB_WORKSPACE}/target-terraform"
+
+          echo "SOURCE: $SOURCE_DIR"
+          echo "TARGET: $TARGET_DIR"
+
+          if [ "$SOURCE_DIR" == "$TARGET_DIR" ]; then
+            echo "ERROR: Source and target directories are the same. Aborting."
+            exit 1
+          fi
+
+          mkdir -p "$TARGET_DIR"
+          cp -r "$SOURCE_DIR/." "$TARGET_DIR/"
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.0
+
+      - name: Get Database Password
+        id: get_password
+        run: |
+          # Check if the secret already exists
+          SECRET_NAME="mlflow-db-password-${{ github.event.inputs.environment || 'dev' }}"
+          
+          # Try to get the existing secret
+          SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_NAME" \
+            --query SecretString \
+            --output text 2>/dev/null)
+          
+          # If secret doesn't exist, create a new one
+          if [ $? -ne 0 ]; then
+            echo "No existing secret found, generating new password..."
+            DB_PASSWORD=$(openssl rand -base64 32)
+            
+            # Store the password in AWS Secrets Manager
+            aws secretsmanager create-secret \
+              --name "$SECRET_NAME" \
+              --description "MLFlow Database Password for ${{ github.event.inputs.environment || 'dev' }} environment" \
+              --secret-string "$DB_PASSWORD"
+            
+            echo "DB_PASSWORD=$DB_PASSWORD" >> $GITHUB_ENV
+          else
+            # Use existing secret
+            echo "Using existing secret..."
+            echo "DB_PASSWORD=$SECRET" >> $GITHUB_ENV
+          fi
+        env:
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+
+      - name: Check Existing VPCs
+        id: check_vpc
+        run: |
+          # Check if VPC with the same name already exists
+          VPC_NAME="mlflow-vpc-${{ github.event.inputs.environment || 'dev' }}"
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment || 'dev' }}" --query 'Vpcs[0].VpcId' --output text)
+          
+          if [ -n "$VPC_ID" ]; then
+            echo "Found existing VPC: $VPC_ID"
+            echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
+            echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
+            
+            # Get existing subnets
+            PUBLIC_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Type,Values=public" --query 'Subnets[*].SubnetId' --output json)
+            PRIVATE_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Type,Values=private" --query 'Subnets[*].SubnetId' --output json)
+            echo "PUBLIC_SUBNET_IDS=$PUBLIC_SUBNETS" >> $GITHUB_OUTPUT
+            echo "PRIVATE_SUBNET_IDS=$PRIVATE_SUBNETS" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+
+      - name: Create VPC Infrastructure
+        if: steps.check_vpc.outputs.VPC_EXISTS != 'true'
+        run: |
+          # Set environment variables
+          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
+          
+          # Configure VPC module
+          cat > vpc.tfvars <<EOF
+          environment = "${ENVIRONMENT}"
+          name = "mlflow-vpc-${ENVIRONMENT}"
+          vpc_cidr = "10.0.0.0/16"
+          azs = ["us-east-1a", "us-east-1b", "us-east-1c"]
+          public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+          private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+          EOF
+          
+          # Initialize and apply VPC module
+          terraform init
+          terraform plan -out=vpc-plan
+          terraform apply -auto-approve vpc-plan
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+
+      - name: Get VPC Outputs
+        if: steps.check_vpc.outputs.VPC_EXISTS != 'true'
+        id: vpc_outputs
+        run: |
+          outputs=$(terraform output -json)
+          echo "VPC_ID=$(echo $outputs | jq -r '.vpc_id.value')" >> $GITHUB_OUTPUT
+          echo "PUBLIC_SUBNET_IDS=$(echo $outputs | jq -r '.public_subnets.value | @json')" >> $GITHUB_OUTPUT
+          echo "PRIVATE_SUBNET_IDS=$(echo $outputs | jq -r '.private_subnets.value | @json')" >> $GITHUB_OUTPUT
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+
+      - name: Get VPC Outputs
+        id: get_vpc_outputs
+        run: |
+          outputs=$(terraform output -json)
+          echo "VPC_ID=$(echo $outputs | jq -r '.vpc_id.value')" >> $GITHUB_OUTPUT
+          echo "PUBLIC_SUBNET_IDS=$(echo $outputs | jq -r '.public_subnets.value | @json')" >> $GITHUB_OUTPUT
+          echo "PRIVATE_SUBNET_IDS=$(echo $outputs | jq -r '.private_subnets.value | @json')" >> $GITHUB_OUTPUT
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+
+      - name: Configure MLFlow Terraform
+        run: |
+          # Set fallback values if inputs are not defined (non-manual runs)
+          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
+          CLUSTER_NAME="mlflow-cluster-${ENVIRONMENT}"
+
+      - name: Configure MLFlow Terraform
+        run: |
+          # Create terraform.tfvars using VPC outputs
+          cat > terraform.tfvars <<EOF
+          environment = "${{ github.event.inputs.environment || 'dev' }}"
+          cluster_name = "mlflow-cluster-${{ github.event.inputs.environment || 'dev' }}"
+          db_password = "${{ env.DB_PASSWORD }}"
+          region = "${{ env.AWS_REGION }}"
+          EOF
+          
+          # Initialize and plan
+          terraform init
+          terraform plan -out=tfplan
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Set VPC Variables
+        run: |
+          # Set VPC variables based on whether we created a new VPC or using existing
+          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
+            echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
+            echo "PUBLIC_SUBNET_IDS=${{ steps.check_vpc.outputs.PUBLIC_SUBNET_IDS }}" >> $GITHUB_ENV
+            echo "PRIVATE_SUBNET_IDS=${{ steps.check_vpc.outputs.PRIVATE_SUBNET_IDS }}" >> $GITHUB_ENV
+          else
+            echo "VPC_ID=${{ steps.vpc_outputs.outputs.VPC_ID }}" >> $GITHUB_ENV
+            echo "PUBLIC_SUBNET_IDS=${{ steps.vpc_outputs.outputs.PUBLIC_SUBNET_IDS }}" >> $GITHUB_ENV
+            echo "PRIVATE_SUBNET_IDS=${{ steps.vpc_outputs.outputs.PRIVATE_SUBNET_IDS }}" >> $GITHUB_ENV
+          fi
+        env:
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+
+      - name: Terraform Apply
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: terraform apply -auto-approve tfplan
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Terraform Plan
+        if: ${{ env.TF_ACTION == 'plan' }}
+        run: terraform plan -out=tfplan
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Terraform Destroy
+        if: ${{ env.TF_ACTION == 'destroy' }}
+        run: terraform destroy -auto-approve
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Save Terraform State
+        if: ${{ env.TF_ACTION == 'apply' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-state
+          path: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}/terraform.tfstate
+
+      - name: Get Outputs
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: |
+          terraform output -json > terraform-outputs.json
+          cat terraform-outputs.json
+        id: get_outputs
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Save Outputs
+        if: ${{ env.TF_ACTION == 'apply' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs
+          path: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}/terraform-outputs.json
+
+      - name: Cleanup
+        if: ${{ env.TF_ACTION == 'destroy' }}
+        run: |
+          rm -f terraform.tfstate
+          rm -f terraform.tfstate.backup
+          rm -f terraform.tfvars
+          rm -f terraform-outputs.json
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
