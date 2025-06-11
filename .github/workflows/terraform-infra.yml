@@ -170,5 +170,5 @@ jobs:
           terraform state show module.s3.aws_s3_bucket.mlflow_bucket || echo "S3 bucket not found in state"
           terraform state show module.s3.aws_iam_user.mlflow_user || echo "IAM user not found in state"
           terraform state show module.eks.module.eks.aws_cloudwatch_log_group.this[0] || echo "Log group not found in state"
-          terraform state show module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"] || echo "KMS alias not found in state"
+          terraform state show module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] || echo "KMS alias not found in state"
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
