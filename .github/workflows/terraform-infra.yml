@@ -3,6 +3,11 @@ name: Terraform Infrastructure
 on:
   workflow_dispatch:
     inputs:
+      recreate:
+        description: 'Recreate existing resources if they exist'
+        required: false
+        default: 'false'
+        type: boolean
       action:
         description: 'Action to perform (plan/apply/destroy)'
         required: true
@@ -299,11 +304,42 @@ jobs:
           # Set environment variables
           ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
           
-          # Create VPC
-          echo "Creating VPC..."
+          # Initialize Terraform
+          echo "Initializing Terraform..."
           terraform init
-          terraform plan -out=tfplan
-          terraform apply -auto-approve tfplan
+          
+          # Check for existing state
+          if [[ -f terraform.tfstate ]]; then
+            echo "State file exists, checking for existing resources..."
+            
+            # Get existing resources
+            existing_vpc=$(terraform state list | grep aws_vpc | cut -d'.' -f2)
+            existing_subnets=$(terraform state list | grep aws_subnet | cut -d'.' -f2)
+            
+            if [[ -n "$existing_vpc" ]]; then
+              echo "Found existing VPC: $existing_vpc"
+              
+              # Check if we need to recreate
+              recreate=${{ github.event.inputs.recreate || 'false' }}
+              if [[ "$recreate" == 'true' ]]; then
+                echo "Recreating resources..."
+                terraform destroy -auto-approve
+                terraform plan -out=tfplan
+                terraform apply -auto-approve tfplan
+              else
+                echo "Skipping recreation of existing resources"
+                exit 0
+              fi
+            else
+              echo "No existing resources found, creating new..."
+              terraform plan -out=tfplan
+              terraform apply -auto-approve tfplan
+            fi
+          else
+            echo "No state file found, creating new resources..."
+            terraform plan -out=tfplan
+            terraform apply -auto-approve tfplan
+          fi
           
           # Get VPC ID
           VPC_ID=$(terraform output -json | jq -r '.vpc_id.value')
