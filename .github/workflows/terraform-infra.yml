@@ -184,12 +184,38 @@ jobs:
             done
             
             # Get all route tables in this VPC
-            rts=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].[RouteTableId]' --output text)
-            for rt in $rts; do
-              # Skip the main route table
-              if [[ "$rt" != "rtb-*main*" ]]; then
-                echo "Deleting route table: $rt"
-                aws ec2 delete-route-table --route-table-id "$rt"
+            echo "Getting route tables for VPC: $vpc_id"
+            aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].[RouteTableId,Main]' --output text | while read -r rt is_main; do
+              if [[ -n "$rt" && "$rt" =~ ^rtb- ]]; then
+                echo "Found route table: $rt (Main: $is_main)"
+                # Skip the main route table
+                if [[ "$is_main" != "true" ]]; then
+                  # First get and delete all routes except the main route
+                  echo "Getting routes for route table: $rt"
+                  aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock]' --output text | while read -r cidr; do
+                    if [[ "$cidr" != "0.0.0.0/0" ]]; then
+                      echo "Deleting route: $cidr from route table: $rt"
+                      aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$cidr"
+                    fi
+                  done
+                  
+                  # Get and disassociate all subnets from this route table
+                  echo "Getting subnet associations for route table: $rt"
+                  aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`false`].RouteTableAssociationId' --output text | while read -r assoc_id; do
+                    if [[ -n "$assoc_id" ]]; then
+                      echo "Disassociating subnet from route table: $rt (Association ID: $assoc_id)"
+                      aws ec2 disassociate-route-table --association-id "$assoc_id"
+                    fi
+                  done
+                  
+                  # Finally delete the route table
+                  echo "Deleting route table: $rt"
+                  aws ec2 delete-route-table --route-table-id "$rt"
+                else
+                  echo "Skipping main route table: $rt"
+                fi
+              else
+                echo "Skipping invalid route table ID: $rt"
               fi
             done
             
