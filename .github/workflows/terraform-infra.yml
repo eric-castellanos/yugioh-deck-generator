@@ -180,38 +180,48 @@ jobs:
             
             # Route tables cleanup
             echo "Getting route tables for VPC: $vpc_id"
-            aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].RouteTableId' --output text | while read -r rt; do
-              echo "Found route table: $rt"
-              
-              # Check if it's the main route table
-              main_assoc=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableAssociationId' --output text)
-              if [[ -n "$main_assoc" ]]; then
-                echo "Route table $rt is main, creating temporary replacement..."
-                new_rt_id=$(aws ec2 create-route-table --vpc-id "$vpc_id" --query 'RouteTable.RouteTableId' --output text)
-                aws ec2 replace-route-table-association --association-id "$main_assoc" --route-table-id "$new_rt_id"
-                echo "Main route table replaced with $new_rt_id"
+            # First get all route table IDs
+            route_tables=$(aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].RouteTableId' --output text)
+            
+            # Split the route table IDs by tabs and process each one
+            IFS=$'\t' read -r -a rt_ids <<< "$route_tables"
+            for rt in "${rt_ids[@]}"; do
+              if [[ -n "$rt" && "$rt" =~ ^rtb- ]]; then
+                echo "Processing route table: $rt"
+                
+                # Check if it's the main route table
+                main_assoc=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableAssociationId' --output text)
+                if [[ -n "$main_assoc" ]]; then
+                  echo "Route table $rt is main, creating temporary replacement..."
+                  new_rt_id=$(aws ec2 create-route-table --vpc-id "$vpc_id" --query 'RouteTable.RouteTableId' --output text)
+                  aws ec2 replace-route-table-association --association-id "$main_assoc" --route-table-id "$new_rt_id"
+                  echo "Main route table replaced with $new_rt_id"
+                fi
+                
+                # Delete all non-local routes
+                aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId]' --output text | while read -r cidr gateway_id; do
+                  if [[ "$gateway_id" != "local" && -n "$gateway_id" ]]; then
+                    echo "Deleting route: $cidr from route table: $rt"
+                    aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$cidr"
+                  else
+                    echo "Skipping route: $cidr (Gateway: $gateway_id)"
+                  fi
+                done
+                
+                # Disassociate all non-main associations
+                aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`false`].RouteTableAssociationId' --output text | while read -r assoc_id; do
+                  if [[ -n "$assoc_id" ]]; then
+                    echo "Disassociating route table: $rt (Assoc ID: $assoc_id)"
+                    aws ec2 disassociate-route-table --association-id "$assoc_id"
+                  fi
+                done
+                
+                echo "Deleting route table: $rt"
+                aws ec2 delete-route-table --route-table-id "$rt" || echo "Route table $rt could not be deleted (may still be associated)."
+              else
+                echo "Skipping invalid route table ID: $rt"
               fi
-              
-              # Delete all non-local routes
-              aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId]' --output text | while read -r cidr gateway_id; do
-                if [[ "$gateway_id" != "local" && -n "$gateway_id" ]]; then
-                  echo "Deleting route: $cidr from route table: $rt"
-                  aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$cidr"
-                else
-                  echo "Skipping route: $cidr (Gateway: $gateway_id)"
-                fi
-              done
-              
-              # Disassociate all non-main associations
-              aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`false`].RouteTableAssociationId' --output text | while read -r assoc_id; do
-                if [[ -n "$assoc_id" ]]; then
-                  echo "Disassociating route table: $rt (Assoc ID: $assoc_id)"
-                  aws ec2 disassociate-route-table --association-id "$assoc_id"
-                fi
-              done
-              
-              echo "Deleting route table: $rt"
-              aws ec2 delete-route-table --route-table-id "$rt" || echo "Route table $rt could not be deleted (may still be associated)."
+            done
             done
             
             # Delete non-default NACLs
