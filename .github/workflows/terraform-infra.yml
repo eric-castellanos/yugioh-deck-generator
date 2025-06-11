@@ -159,15 +159,39 @@ jobs:
                 echo "Processing subnet: $subnet"
                 
                 # First check for dependencies
-                dependencies=$(aws ec2 describe-subnets --subnet-ids "$subnet" --query 'Subnets[0].{Instances:Instances,NetworkInterfaces:NetworkInterfaces}' --output json)
+                dependencies=$(aws ec2 describe-subnets --subnet-ids "$subnet" --query 'Subnets[0] | {Instances:Instances[*].InstanceId, NetworkInterfaces:NetworkInterfaces[*].NetworkInterfaceId, NatGateways:NatGateways[*].NatGatewayId}' --output json)
                 if [[ -n "$dependencies" ]]; then
                   echo "Found dependencies for subnet $subnet: $dependencies"
                   
-                  # Wait for dependencies to be cleaned up
-                  echo "Waiting for dependencies to be cleaned up..."
-                  sleep 5
+                  # Handle instances
+                  if [[ -n "$(echo "$dependencies" | jq -r '.Instances | select(length > 0)')" ]]; then
+                    echo "Found instances in subnet $subnet"
+                    # Wait longer for instances to terminate
+                    echo "Waiting 30 seconds for instances to terminate..."
+                    sleep 30
+                  fi
                   
-                  # Try deleting again
+                  # Handle network interfaces
+                  if [[ -n "$(echo "$dependencies" | jq -r '.NetworkInterfaces | select(length > 0)')" ]]; then
+                    echo "Found network interfaces in subnet $subnet"
+                    # Try to delete network interfaces
+                    for ni in $(echo "$dependencies" | jq -r '.NetworkInterfaces[]'); do
+                      echo "Deleting network interface: $ni"
+                      aws ec2 delete-network-interface --network-interface-id "$ni" || echo "Could not delete network interface $ni"
+                    done
+                  fi
+                  
+                  # Handle NAT gateways
+                  if [[ -n "$(echo "$dependencies" | jq -r '.NatGateways | select(length > 0)')" ]]; then
+                    echo "Found NAT gateways in subnet $subnet"
+                    # Delete NAT gateways
+                    for ng in $(echo "$dependencies" | jq -r '.NatGateways[]'); do
+                      echo "Deleting NAT gateway: $ng"
+                      aws ec2 delete-nat-gateway --nat-gateway-id "$ng" || echo "Could not delete NAT gateway $ng"
+                    done
+                  fi
+                  
+                  # Try deleting subnet after handling dependencies
                   echo "Attempting to delete subnet: $subnet"
                   aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted (dependencies may still exist)"
                 else
@@ -178,6 +202,10 @@ jobs:
                 echo "Skipping invalid subnet ID: $subnet"
               fi
             done
+            
+            # Wait a bit after subnet cleanup
+            echo "Waiting 10 seconds after subnet cleanup..."
+            sleep 10
             
             # Delete non-default security groups with dependency handling
             echo "Getting security groups for VPC: $vpc_id"
