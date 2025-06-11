@@ -67,7 +67,16 @@
                 "iam:CreateRole",
                 "iam:AttachRolePolicy",
                 "iam:CreatePolicy",
-                "iam:ListRoles"
+                "iam:ListRoles",
+                "iam:CreateUser",
+                "iam:TagRole",
+                "s3:CreateBucket",
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:ListBucket",
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
             ],
             "Resource": "*"
         }

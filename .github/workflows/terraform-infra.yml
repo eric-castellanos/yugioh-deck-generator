@@ -141,6 +141,19 @@ jobs:
           echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
         working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
 
+      - name: Check VPC Limits
+        run: |
+          # Check VPC limits and clean up if necessary
+          echo "Checking VPC limits..."
+          aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId]' --output text | while read -r vpc_id; do
+            echo "Found VPC: $vpc_id"
+            if [[ "$vpc_id" =~ ^vpc- ]]; then
+              echo "Deleting VPC: $vpc_id"
+              aws ec2 delete-vpc --vpc-id "$vpc_id"
+            fi
+          done
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+
       - name: Create VPC Infrastructure
         if: steps.check_vpc.outputs.VPC_EXISTS != 'true'
         run: |
