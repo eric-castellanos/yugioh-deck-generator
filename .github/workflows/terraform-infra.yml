@@ -104,7 +104,7 @@ jobs:
         working-directory: ${{ github.workspace }}/infra/terraform/vpc
 
       - name: Import Existing Resources
-        if: ${{ env.TF_ACTION == 'apply' && github.event.inputs.recreate == 'true' }}
+        if: ${{ env.TF_ACTION == 'apply' }}
         run: |
           terraform init -upgrade
           if aws s3api head-bucket --bucket mlflow-backend-${{ github.event.inputs.environment }} 2>/dev/null; then
@@ -123,6 +123,8 @@ jobs:
           if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
             terraform import module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
           fi
+
+          terraform state list || echo "No state yet"
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Apply
@@ -158,4 +160,3 @@ jobs:
             exit 1
           fi
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
