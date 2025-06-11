@@ -6,6 +6,7 @@ module "vpc" {
 
 module "s3" {
   source = "./s3"
+  region = var.region
 }
 
 module "rds" {
@@ -13,6 +14,7 @@ module "rds" {
   vpc_id      = module.vpc.vpc_id
   subnet_ids  = module.vpc.private_subnet_ids
   db_password = var.db_password
+  region      = var.region
 }
 
 module "eks" {
