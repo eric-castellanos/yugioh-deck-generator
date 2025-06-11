@@ -143,38 +143,33 @@ jobs:
 
       - name: Check VPC Limits and Cleanup
         run: |
-          # Check VPC limits and clean up if necessary
           echo "Checking VPC limits and cleaning up..."
           
-          # Get all VPCs
           aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId]' --output text | while read -r vpc_id; do
             echo "Found VPC: $vpc_id"
             
-            # Get all subnets in this VPC
+            # Delete all subnets
             subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[*].[SubnetId]' --output text)
             for subnet in $subnets; do
               echo "Deleting subnet: $subnet"
               aws ec2 delete-subnet --subnet-id "$subnet"
             done
             
-            # Get all security groups in this VPC
+            # Delete non-default security groups
             echo "Getting security groups for VPC: $vpc_id"
             aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query 'SecurityGroups[*].[GroupId,GroupName]' --output text | while read -r sg name; do
               if [[ -n "$sg" && "$sg" =~ ^sg- ]]; then
                 echo "Found security group: $sg ($name)"
-                # Skip the default security group
                 if [[ "$name" != "default" ]]; then
                   echo "Deleting security group: $sg"
                   aws ec2 delete-security-group --group-id "$sg"
                 else
                   echo "Skipping default security group: $sg"
                 fi
-              else
-                echo "Skipping invalid security group ID: $sg"
               fi
             done
             
-            # Get all internet gateways in this VPC
+            # Delete internet gateways
             igs=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$vpc_id" --query 'InternetGateways[*].[InternetGatewayId]' --output text)
             for ig in $igs; do
               echo "Detaching internet gateway: $ig"
@@ -183,56 +178,52 @@ jobs:
               aws ec2 delete-internet-gateway --internet-gateway-id "$ig"
             done
             
-            # Get all route tables in this VPC
+            # Route tables cleanup
             echo "Getting route tables for VPC: $vpc_id"
-            aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].[RouteTableId,Main]' --output text | while read -r rt is_main; do
-              if [[ -n "$rt" && "$rt" =~ ^rtb- ]]; then
-                echo "Found route table: $rt (Main: $is_main)"
-                # Skip the main route table
-                if [[ "$is_main" != "true" ]]; then
-                  # First get and delete all routes except the main route and local routes
-                  echo "Getting routes for route table: $rt"
-                  aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId]' --output text | while read -r cidr gateway_id; do
-                    # Skip the main route (0.0.0.0/0) and local routes (GatewayId starts with 'local')
-                    if [[ "$cidr" != "0.0.0.0/0" && "$gateway_id" != "local" ]]; then
-                      echo "Deleting route: $cidr from route table: $rt"
-                      aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$cidr"
-                    else
-                      echo "Skipping route: $cidr (Gateway: $gateway_id)"
-                    fi
-                  done
-                  
-                  # Get and disassociate all subnets from this route table
-                  echo "Getting subnet associations for route table: $rt"
-                  aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`false`].RouteTableAssociationId' --output text | while read -r assoc_id; do
-                    if [[ -n "$assoc_id" ]]; then
-                      echo "Disassociating subnet from route table: $rt (Association ID: $assoc_id)"
-                      aws ec2 disassociate-route-table --association-id "$assoc_id"
-                    fi
-                  done
-                  
-                  # Finally delete the route table
-                  echo "Deleting route table: $rt"
-                  aws ec2 delete-route-table --route-table-id "$rt"
+            aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].RouteTableId' --output text | while read -r rt; do
+              echo "Found route table: $rt"
+              
+              # Handle if it's the main route table
+              main_assoc=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableAssociationId' --output text)
+              if [[ -n "$main_assoc" ]]; then
+                echo "Route table $rt is main, creating temporary replacement..."
+                new_rt_id=$(aws ec2 create-route-table --vpc-id "$vpc_id" --query 'RouteTable.RouteTableId' --output text)
+                aws ec2 replace-route-table-association --association-id "$main_assoc" --route-table-id "$new_rt_id"
+                echo "Main route table replaced with $new_rt_id"
+              fi
+              
+              # Delete all non-local routes
+              aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[*].[DestinationCidrBlock,GatewayId]' --output text | while read -r cidr gateway_id; do
+                if [[ "$gateway_id" != "local" && -n "$gateway_id" ]]; then
+                  echo "Deleting route: $cidr from route table: $rt"
+                  aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$cidr"
                 else
-                  echo "Skipping main route table: $rt"
+                  echo "Skipping route: $cidr (Gateway: $gateway_id)"
                 fi
-              else
-                echo "Skipping invalid route table ID: $rt"
-              fi
+              done
+              
+              # Disassociate all non-main associations
+              aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`false`].RouteTableAssociationId' --output text | while read -r assoc_id; do
+                if [[ -n "$assoc_id" ]]; then
+                  echo "Disassociating route table: $rt (Assoc ID: $assoc_id)"
+                  aws ec2 disassociate-route-table --association-id "$assoc_id"
+                fi
+              done
+              
+              echo "Deleting route table: $rt"
+              aws ec2 delete-route-table --route-table-id "$rt" || echo "Route table $rt could not be deleted (may still be associated)."
             done
             
-            # Get all network ACLs in this VPC
+            # Delete non-default NACLs
             nacls=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$vpc_id" --query 'NetworkAcls[*].[NetworkAclId,IsDefault]' --output text)
-            while read -r n is_default; do
-              # Skip the default network ACL
+            while read -r nacl_id is_default; do
               if [[ "$is_default" != "true" ]]; then
-                echo "Deleting network ACL: $n"
-                aws ec2 delete-network-acl --network-acl-id "$n"
+                echo "Deleting network ACL: $nacl_id"
+                aws ec2 delete-network-acl --network-acl-id "$nacl_id"
               fi
             done
             
-            # Finally delete the VPC
+            # Delete the VPC
             echo "Deleting VPC: $vpc_id"
             aws ec2 delete-vpc --vpc-id "$vpc_id"
           done
