@@ -86,6 +86,38 @@ jobs:
         with:
           terraform_version: 1.6.0
 
+      - name: Get Database Password
+        id: get_password
+        run: |
+          # Check if the secret already exists
+          SECRET_NAME="mlflow-db-password-${{ github.event.inputs.environment || 'dev' }}"
+          
+          # Try to get the existing secret
+          SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_NAME" \
+            --query SecretString \
+            --output text 2>/dev/null)
+          
+          # If secret doesn't exist, create a new one
+          if [ $? -ne 0 ]; then
+            echo "No existing secret found, generating new password..."
+            DB_PASSWORD=$(openssl rand -base64 32)
+            
+            # Store the password in AWS Secrets Manager
+            aws secretsmanager create-secret \
+              --name "$SECRET_NAME" \
+              --description "MLFlow Database Password for ${{ github.event.inputs.environment || 'dev' }} environment" \
+              --secret-string "$DB_PASSWORD"
+            
+            echo "DB_PASSWORD=$DB_PASSWORD" >> $GITHUB_ENV
+          else
+            # Use existing secret
+            echo "Using existing secret..."
+            echo "DB_PASSWORD=$SECRET" >> $GITHUB_ENV
+          fi
+        env:
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+
       - name: Configure Terraform
         run: |
           # Set fallback values if inputs are not defined (non-manual runs)
@@ -109,6 +141,7 @@ jobs:
           cluster_name = "${CLUSTER_NAME}"
           subnet_ids = [${SUBNET_IDS}]
           vpc_id = "${VPC_ID}"
+          db_password = "${{ env.DB_PASSWORD }}"
           EOF
         working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform' }}
 
