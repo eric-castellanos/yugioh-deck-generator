@@ -20,6 +20,12 @@ variable "cluster_version" {
   default     = "1.27"
 }
 
+variable "mlflow_user" {
+  description = "Username for MLFlow IAM user"
+  type        = string
+  default     = "mlflow-user"
+}
+
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type        = string
