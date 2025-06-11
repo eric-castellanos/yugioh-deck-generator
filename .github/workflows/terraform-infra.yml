@@ -307,7 +307,11 @@ jobs:
             
             # Delete the VPC
             echo "Deleting VPC: $vpc_id"
-            aws ec2 delete-vpc --vpc-id "$vpc_id"
+            aws ec2 delete-vpc --vpc-id "$vpc_id" || echo "VPC $vpc_id could not be deleted (dependencies may still exist)"
+            
+            # Wait a bit after VPC deletion
+            echo "Waiting 10 seconds after VPC deletion..."
+            sleep 10
           done
         working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
 
