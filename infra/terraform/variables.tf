@@ -4,10 +4,14 @@ variable "db_password" {
   sensitive   = true
 }
 
+variable "region" {
+  default = "us-east-1"
+}
+
 variable "cluster_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string
-  default     = "1.29"
+  default     = "1.27"
 }
 
 variable "cluster_name" {

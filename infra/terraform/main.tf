@@ -23,12 +23,12 @@ module "eks" {
   subnet_ids        = module.vpc.private_subnet_ids
 }
 
-output "rds_endpoint" {
-  value = module.rds.db_endpoint
+output "mlflow_db_endpoint" {
+  value = module.rds.mlflow_db_endpoint
 }
 
-output "s3_bucket_name" {
-  value = module.s3.bucket_name
+output "mlflow_bucket_name" {
+  value = module.s3.mlflow_bucket_name
 }
 
 output "eks_cluster_name" {

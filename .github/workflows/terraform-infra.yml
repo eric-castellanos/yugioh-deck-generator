@@ -195,6 +195,7 @@ jobs:
           environment = "${{ github.event.inputs.environment || 'dev' }}"
           cluster_name = "mlflow-cluster-${{ github.event.inputs.environment || 'dev' }}"
           db_password = "${{ env.DB_PASSWORD }}"
+          region = "${{ env.AWS_REGION }}"
           EOF
           
           # Initialize and plan
