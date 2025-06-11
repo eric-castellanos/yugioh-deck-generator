@@ -218,12 +218,14 @@ jobs:
               
               # Delete non-default NACLs
               nacls=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$vpc_id" --query 'NetworkAcls[*].[NetworkAclId,IsDefault]' --output text)
-              echo "$nacls" | while read -r nacl_id is_default; do
+              while read -r nacl_id is_default; do
                 if [[ "$is_default" != "true" ]]; then
                   echo "Deleting network ACL: $nacl_id"
                   aws ec2 delete-network-acl --network-acl-id "$nacl_id"
+                else
+                  echo "Skipping default NACL: $nacl_id"
                 fi
-              done
+              done <<< "$nacls"
               
               echo "Deleting VPC: $vpc_id"
               aws ec2 delete-vpc --vpc-id "$vpc_id" || echo "VPC $vpc_id could not be deleted (dependencies may still exist)"
