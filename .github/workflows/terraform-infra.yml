@@ -147,6 +147,7 @@ jobs:
         working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
 
       - name: Check VPC Limits and Cleanup
+        if: github.event.inputs.action == 'apply' && github.event.inputs.recreate == 'true'
         run: |
           echo "Checking VPC limits and cleaning up..."
           aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId]' --output text | while read -r vpc_id; do
