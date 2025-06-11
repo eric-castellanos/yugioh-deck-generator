@@ -223,7 +223,20 @@ jobs:
                 echo "Found non-default NACLs: $nacls"
                 for nacl_id in $nacls; do
                   echo "Deleting network ACL: $nacl_id"
-                  aws ec2 delete-network-acl --network-acl-id "$nacl_id" || echo "Could not delete NACL $nacl_id"
+                  retries=3
+                  while [[ $retries -gt 0 ]]; do
+                    if aws ec2 delete-network-acl --network-acl-id "$nacl_id" 2>/dev/null; then
+                      echo "Successfully deleted NACL: $nacl_id"
+                      break
+                    else
+                      echo "Failed to delete NACL $nacl_id, retrying... ($retries attempts left)"
+                      sleep 5
+                      retries=$((retries - 1))
+                    fi
+                  done
+                  if [[ $retries -eq 0 ]]; then
+                    echo "Could not delete NACL $nacl_id after multiple attempts"
+                  fi
                 done
               else
                 echo "No non-default NACLs found"
