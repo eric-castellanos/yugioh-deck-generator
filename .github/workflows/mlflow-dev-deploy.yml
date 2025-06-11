@@ -210,7 +210,7 @@ jobs:
           kubectl apply -f infra/k8s/mlflow/pvc-dev.yaml -n ${{ env.NAMESPACE }}
           sleep 2
 
-          - name: Create Secrets
+      - name: Create Secrets
         run: |
           # Create secrets with IAM role information
           kubectl create secret generic mlflow-secrets-dev \
