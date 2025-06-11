@@ -20,6 +20,12 @@
 .env
 /.venv/
 
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate*
+*.tfstate*
+
 # Project
 /docs/*
 /mlruns/*
@@ -29,21 +35,4 @@
 # Python
 *.py[cod]
 __pycache__/
-
-# Terraform
-**.terraform/
-*.terraform.lock.hcl
-*.tfstate
-*.tfstate.*
-terraform.tfvars
-*.tfvars
-.terragrunt-cache/
-*.tfplan
-*.tfplan.*
-*.tfbackup
-**/*.tfstate
-**/*.tfstate.*
-**/*.tfplan
-**/*.tfplan.*
-**/*.tfbackup
 
