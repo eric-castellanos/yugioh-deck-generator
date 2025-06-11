@@ -13,6 +13,18 @@
         {
             "Effect": "Allow",
             "Action": [
+                "kms:CreateKey",
+                "kms:CreateAlias",
+                "kms:DescribeKey",
+                "kms:TagResource",
+                "kms:ListAliases",
+                "kms:ListTags"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
                 "ec2:DescribeVpcs",
                 "ec2:DescribeSubnets",
                 "ec2:CreateVpc",
@@ -85,16 +97,23 @@
                 "iam:PutRolePolicy",
                 "iam:ListRolePolicies",
                 "iam:GetUser",
+                "iam:GetRolePolicy",
+                "iam:ListAttachedRolePolicies",
                 "s3:CreateBucket",
                 "s3:PutObject",
                 "s3:GetObject",
                 "s3:ListBucket",
+                "s3:DeleteBucket",
+                "s3:DeleteObject",
                 "logs:CreateLogGroup",
                 "logs:CreateLogStream",
                 "logs:PutLogEvents",
                 "logs:TagResource",
+                "logs:PutRetentionPolicy",
                 "rds:CreateDBSubnetGroup",
                 "rds:DescribeDBSubnetGroups",
+                "rds:ListTagsForResource",
+                "rds:DeleteDBSubnetGroup",
                 "ec2:DisassociateRouteTable",
                 "ec2:DeleteNetworkInterface",
                 "ec2:DescribeNetworkInterfaces"

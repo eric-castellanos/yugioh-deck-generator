@@ -401,6 +401,16 @@ jobs:
         env:
           AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
 
+      - name: Import Existing Resources
+        if: ${{ env.TF_ACTION == 'apply' && github.event.inputs.recreate == 'true' }}
+        run: |
+          terraform import aws_db_subnet_group.mlflow mlflow-db-subnet-group-dev
+          terraform import aws_s3_bucket.mlflow_bucket mlflow-backend
+          terraform import aws_iam_user.mlflow_user user
+          terraform import aws_iam_policy.mlflow_s3_policy mlflow-s3-access
+          terraform import aws_cloudwatch_log_group.eks ${AWS_REGION}_aws_eks_${{ github.event.inputs.environment }}_cluster
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
       - name: Terraform Apply
         if: ${{ env.TF_ACTION == 'apply' }}
         run: terraform apply -auto-approve tfplan
