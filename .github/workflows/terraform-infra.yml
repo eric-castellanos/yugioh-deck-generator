@@ -54,32 +54,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Copy Terraform files safely
-        run: |
-          # Use dispatch input if available, or fallback to default
-          INPUT_SOURCE_DIR="${{ inputs.source_dir }}"
-          FALLBACK_DIR="infra/terraform"
-
-          if [ -z "$INPUT_SOURCE_DIR" ]; then
-            echo "No input for source_dir detected. Defaulting to: $FALLBACK_DIR"
-            SOURCE_DIR="${GITHUB_WORKSPACE}/$FALLBACK_DIR"
-          else
-            SOURCE_DIR="${GITHUB_WORKSPACE}/$INPUT_SOURCE_DIR"
-          fi
-
-          TARGET_DIR="${GITHUB_WORKSPACE}/target-terraform"
-
-          echo "SOURCE: $SOURCE_DIR"
-          echo "TARGET: $TARGET_DIR"
-
-          if [ "$SOURCE_DIR" == "$TARGET_DIR" ]; then
-            echo "ERROR: Source and target directories are the same. Aborting."
-            exit 1
-          fi
-
-          mkdir -p "$TARGET_DIR"
-          cp -r "$SOURCE_DIR/." "$TARGET_DIR/"
-
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -91,385 +65,74 @@ jobs:
         with:
           terraform_version: 1.6.0
 
-      - name: Get Database Password
-        id: get_password
+      - name: Configure MLFlow Terraform
         run: |
-          # Check if the secret already exists
-          SECRET_NAME="mlflow-db-password-${{ github.event.inputs.environment || 'dev' }}"
-          
-          # Try to get the existing secret
-          SECRET=$(aws secretsmanager get-secret-value \
-            --secret-id "$SECRET_NAME" \
-            --query SecretString \
-            --output text 2>/dev/null)
-          
-          # If secret doesn't exist, create a new one
-          if [ $? -ne 0 ]; then
-            echo "No existing secret found, generating new password..."
-            DB_PASSWORD=$(openssl rand -base64 32)
-            
-            # Store the password in AWS Secrets Manager
-            aws secretsmanager create-secret \
-              --name "$SECRET_NAME" \
-              --description "MLFlow Database Password for ${{ github.event.inputs.environment || 'dev' }} environment" \
-              --secret-string "$DB_PASSWORD"
-            
-            echo "DB_PASSWORD=$DB_PASSWORD" >> $GITHUB_ENV
-          else
-            # Use existing secret
-            echo "Using existing secret..."
-            echo "DB_PASSWORD=$SECRET" >> $GITHUB_ENV
-          fi
-        env:
-          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
+          CLUSTER_NAME="mlflow-cluster-${ENVIRONMENT}"
+
+      - name: Create terraform.tfvars file
+        run: |
+          cat > terraform.tfvars <<EOF
+          environment = "${{ github.event.inputs.environment || 'dev' }}"
+          cluster_name = "mlflow-cluster-${{ github.event.inputs.environment || 'dev' }}"
+          db_password = "${{ secrets.DB_PASSWORD }}"
+          region = "${{ env.AWS_REGION }}"
+          bucket_name = "mlflow-backend-${{ github.event.inputs.environment || 'dev' }}"
+          mlflow_user = "mlflow-user-${{ github.event.inputs.environment || 'dev' }}"
+          EOF
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Check Existing VPCs
         id: check_vpc
         run: |
-          # Check if VPC with the same name already exists
-          VPC_NAME="mlflow-vpc-${{ github.event.inputs.environment || 'dev' }}"
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment || 'dev' }}" --query 'Vpcs[0].VpcId' --output text)
-          
-          if [ -n "$VPC_ID" ]; then
-            echo "Found existing VPC: $VPC_ID"
+          if [ "$VPC_ID" != "None" ]; then
             echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
             echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
-            
-            # Get existing subnets
-            PUBLIC_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Type,Values=public" --query 'Subnets[*].SubnetId' --output json)
-            PRIVATE_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Type,Values=private" --query 'Subnets[*].SubnetId' --output json)
-            echo "PUBLIC_SUBNET_IDS=$PUBLIC_SUBNETS" >> $GITHUB_OUTPUT
-            echo "PRIVATE_SUBNET_IDS=$PRIVATE_SUBNETS" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
-        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
-
-      - name: Check VPC Limits and Cleanup
-        if: github.event.inputs.action == 'apply' && github.event.inputs.recreate == 'true'
-        run: |
-          echo "Checking VPC limits and cleaning up..."
-          aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId]' --output text | while read -r vpc_id; do
-            if [[ -n "$vpc_id" && "$vpc_id" =~ ^vpc- ]]; then
-              echo "Found VPC: $vpc_id"
-
-              # Delete all subnets with dependency handling
-              echo "Getting subnets for VPC: $vpc_id"
-              subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[*].[SubnetId]' --output text)
-              IFS=$'\t' read -r -a subnet_ids <<< "$subnets"
-              for subnet in "${subnet_ids[@]}"; do
-                if [[ -n "$subnet" && "$subnet" =~ ^subnet- ]]; then
-                  echo "Processing subnet: $subnet"
-
-                  dependencies=$(aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=$subnet --query 'NetworkInterfaces[*].[NetworkInterfaceId]' --output text)
-                  for eni in $dependencies; do
-                    echo "Deleting network interface: $eni"
-                    aws ec2 delete-network-interface --network-interface-id "$eni" || echo "Could not delete ENI $eni"
-                  done
-
-                  nat_gws=$(aws ec2 describe-nat-gateways --filter "Name=subnet-id,Values=$subnet" --query 'NatGateways[*].NatGatewayId' --output text)
-                  for ngw in $nat_gws; do
-                    echo "Deleting NAT gateway: $ngw"
-                    aws ec2 delete-nat-gateway --nat-gateway-id "$ngw" || echo "Could not delete NAT gateway $ngw"
-                  done
-
-                  echo "Attempting to delete subnet: $subnet"
-                  aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted (dependencies may still exist)"
-                else
-                  echo "Skipping invalid subnet ID: $subnet"
-                fi
-              done
-
-              echo "Waiting 10 seconds after subnet cleanup..."
-              sleep 10
-
-              # Delete non-default security groups
-              echo "Getting security groups for VPC: $vpc_id"
-              aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query "SecurityGroups[?GroupName!='default'].GroupId" --output text | tr '\t' '\n' | while read -r sg; do
-                if [[ -n "$sg" && "$sg" =~ ^sg- ]]; then
-                  echo "Processing security group: $sg"
-                  retries=3
-                  while [[ $retries -gt 0 ]]; do
-                    # Check for attached ENIs
-                    attached_enis=$(aws ec2 describe-network-interfaces --filters Name=group-id,Values=$sg --query 'NetworkInterfaces[*].NetworkInterfaceId' --output text)
-                    if [[ -n "$attached_enis" ]]; then
-                      echo "Security group $sg has attached ENIs: $attached_enis"
-                      for eni in $attached_enis; do
-                        echo "Attempting to delete ENI $eni..."
-                        aws ec2 delete-network-interface --network-interface-id "$eni" || echo "Could not delete ENI $eni (still in use)"
-                      done
-                      echo "Waiting 5 seconds after ENI cleanup..."
-                      sleep 5
-                    fi
-
-                    # Check for instances using this security group
-                    instances=$(aws ec2 describe-instances --filters "Name=network-interface.group-id,Values=$sg" --query 'Reservations[*].Instances[*].[InstanceId]' --output text)
-                    if [[ -n "$instances" ]]; then
-                      echo "Security group $sg is still used by instances: $instances"
-                      echo "Waiting 10 seconds for instances to terminate..."
-                      sleep 10
-                    fi
-
-                    # Try to delete the security group
-                    echo "Attempting to delete security group: $sg (attempt $((4 - retries)))"
-                    if aws ec2 delete-security-group --group-id "$sg" 2>/dev/null; then
-                      echo "Successfully deleted security group: $sg"
-                      break
-                    else
-                      echo "Failed to delete security group $sg, retrying..."
-                      sleep 5
-                      retries=$((retries - 1))
-                    fi
-                  done
-
-                  if [[ $retries -eq 0 ]]; then
-                    echo "Could not delete security group $sg after multiple attempts"
-                  fi
-                fi
-              done
-
-              # Get route tables and process each one
-              echo "Getting route tables for VPC: $vpc_id"
-              aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].RouteTableId' --output text | tr '\t' '\n' | while read -r rt; do
-                if [[ -n "$rt" && "$rt" =~ ^rtb- ]]; then
-                  echo "Processing route table: $rt"
-
-                  main_assoc_id=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableAssociationId' --output text)
-                  if [[ -n "$main_assoc_id" ]]; then
-                    echo "Route table $rt is main, creating temporary replacement..."
-                    temp_rt=$(aws ec2 create-route-table --vpc-id "$vpc_id" --query 'RouteTable.RouteTableId' --output text)
-                    aws ec2 replace-route-table-association --association-id "$main_assoc_id" --route-table-id "$temp_rt"
-                    echo "Main route table replaced with $temp_rt"
-                  fi
-
-                  associations=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`false`].RouteTableAssociationId' --output text)
-                  for assoc in $associations; do
-                    echo "Disassociating route table from subnet (assoc ID: $assoc)"
-                    aws ec2 disassociate-route-table --association-id "$assoc"
-                  done
-
-                  aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[?GatewayId!=`local`].[DestinationCidrBlock,GatewayId]' --output text | while read -r dest gw; do
-                    if [[ -n "$dest" && -n "$gw" ]]; then
-                      echo "Deleting route: $dest (Gateway: $gw) from route table: $rt"
-                      aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$dest"
-                    fi
-                  done
-
-                  echo "Deleting route table: $rt"
-                  aws ec2 delete-route-table --route-table-id "$rt" || echo "Route table $rt could not be deleted (dependencies may still exist)"
-                else
-                  echo "Skipping invalid route table ID: $rt"
-                fi
-              done
-
-              # Delete non-default NACLs
-              echo "Getting NACLs for VPC: $vpc_id"
-              nacls=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$vpc_id" --query 'NetworkAcls[?IsDefault==`false`].NetworkAclId' --output text)
-              if [[ -n "$nacls" ]]; then
-                for nacl_id in $nacls; do
-                  echo "Deleting network ACL: $nacl_id"
-                  retries=3
-                  while [[ $retries -gt 0 ]]; do
-                    if aws ec2 delete-network-acl --network-acl-id "$nacl_id" 2>/dev/null; then
-                      echo "Successfully deleted NACL: $nacl_id"
-                      break
-                    else
-                      echo "Failed to delete NACL $nacl_id, retrying... ($retries attempts left)"
-                      sleep 5
-                      retries=$((retries - 1))
-                    fi
-                  done
-                  if [[ $retries -eq 0 ]]; then
-                    echo "Could not delete NACL $nacl_id after multiple attempts"
-                  fi
-                done
-              else
-                echo "No non-default NACLs found"
-              fi
-
-              echo "Deleting VPC: $vpc_id"
-              aws ec2 delete-vpc --vpc-id "$vpc_id" || echo "VPC $vpc_id could not be deleted (dependencies may still exist)"
-
-              echo "Waiting 10 seconds after VPC deletion..."
-              sleep 10
-            else
-              echo "Skipping invalid VPC ID: $vpc_id"
-            fi
-          done
-        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
-
-      - name: Create VPC Infrastructure
-        if: steps.check_vpc.outputs.VPC_EXISTS != 'true'
-        run: |
-          # Set environment variables
-          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
-          
-          # Initialize Terraform with upgrade flag
-          echo "Initializing Terraform with upgrade flag..."
-          terraform init -upgrade
-          
-          # Check for existing state
-          if [[ -f terraform.tfstate ]]; then
-            echo "State file exists, checking for existing resources..."
-            
-            # Get existing resources
-            existing_vpc=$(terraform state list | grep aws_vpc | cut -d'.' -f2)
-            existing_subnets=$(terraform state list | grep aws_subnet | cut -d'.' -f2)
-            
-            if [[ -n "$existing_vpc" ]]; then
-              echo "Found existing VPC: $existing_vpc"
-              
-              # Check if we need to recreate
-              recreate=${{ github.event.inputs.recreate || 'false' }}
-              if [[ "$recreate" == 'true' ]]; then
-                echo "Recreating resources..."
-                terraform destroy -auto-approve
-                terraform plan -out=tfplan
-                terraform apply -auto-approve tfplan
-              else
-                echo "Skipping recreation of existing resources"
-                exit 0
-              fi
-            else
-              echo "No existing resources found, creating new..."
-              terraform plan -out=tfplan
-              terraform apply -auto-approve tfplan
-            fi
           else
-            echo "No state file found, creating new resources..."
-            terraform plan -out=tfplan
-            terraform apply -auto-approve tfplan
+            echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
           fi
-          
-          # Get VPC ID
-          VPC_ID=$(terraform output -json | jq -r '.vpc_id.value')
-          
-          # Get subnet IDs
-          PUBLIC_SUBNETS=$(terraform output -json | jq -r '.public_subnet_ids.value | map(tostring) | join(",")')
-          PRIVATE_SUBNETS=$(terraform output -json | jq -r '.private_subnet_ids.value | map(tostring) | join(",")')
-          
-          # Output values
-          echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
-          echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
-          echo "PUBLIC_SUBNET_IDS=$PUBLIC_SUBNETS" >> $GITHUB_OUTPUT
-          echo "PRIVATE_SUBNET_IDS=$PRIVATE_SUBNETS" >> $GITHUB_OUTPUT
-        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+        working-directory: ${{ github.workspace }}/infra/terraform/vpc
 
-      - name: Get VPC Outputs
-        if: steps.check_vpc.outputs.VPC_EXISTS != 'true'
-        id: vpc_outputs
+      - name: Set VPC Variables
         run: |
-          outputs=$(terraform output -json)
-          echo "VPC_ID=$(echo $outputs | jq -r '.vpc_id.value')" >> $GITHUB_OUTPUT
-          echo "PUBLIC_SUBNET_IDS=$(echo $outputs | jq -r '.public_subnets.value | @json')" >> $GITHUB_OUTPUT
-          echo "PRIVATE_SUBNET_IDS=$(echo $outputs | jq -r '.private_subnets.value | @json')" >> $GITHUB_OUTPUT
-        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
+            echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
+          else
+            echo "VPC_ID=$(terraform output -raw vpc_id)" >> $GITHUB_ENV
+          fi
+        working-directory: ${{ github.workspace }}/infra/terraform/vpc
 
       - name: Import Existing Resources
         if: ${{ env.TF_ACTION == 'apply' && github.event.inputs.recreate == 'true' }}
         run: |
           terraform init -upgrade
-      
-          # Import DB subnet group if it exists
-          if aws rds describe-db-subnet-groups --db-subnet-group-name mlflow-db-subnet-group-dev 2>/dev/null; then
-            terraform import aws_db_subnet_group.mlflow mlflow-db-subnet-group-dev
+          if aws s3api head-bucket --bucket mlflow-backend-${{ github.event.inputs.environment }} 2>/dev/null; then
+            terraform import module.s3.aws_s3_bucket.mlflow_bucket mlflow-backend-${{ github.event.inputs.environment }}
           fi
-      
-          # Import S3 bucket if it exists
-          if aws s3api head-bucket --bucket mlflow-backend 2>/dev/null; then
-            terraform import aws_s3_bucket.mlflow_bucket mlflow-backend
+          if aws iam get-user --user-name mlflow-user-${{ github.event.inputs.environment }} 2>/dev/null; then
+            terraform import module.s3.aws_iam_user.mlflow_user mlflow-user-${{ github.event.inputs.environment }}
           fi
-      
-          # Import IAM user if it exists
-          if aws iam get-user --user-name user 2>/dev/null; then
-            terraform import aws_iam_user.mlflow_user user
+          if aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text | grep -q .; then
+            POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text)
+            terraform import module.s3.aws_iam_policy.mlflow_s3_policy $POLICY_ARN
           fi
-      
-          # Import IAM policy if it exists
-          if aws iam get-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access 2>/dev/null; then
-            terraform import aws_iam_policy.mlflow_s3_policy arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access
-          fi
-      
-          # Import CloudWatch log group if it exists
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster 2>/dev/null; then
-            terraform import aws_cloudwatch_log_group.eks /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
+            terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
+          fi
+          if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
+            terraform import module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
           fi
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
-      - name: Configure MLFlow Terraform
-        run: |
-          # Set fallback values if inputs are not defined (non-manual runs)
-          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
-          CLUSTER_NAME="mlflow-cluster-${ENVIRONMENT}"
-
-      - name: Configure MLFlow Terraform
-        run: |
-          # Create terraform.tfvars using VPC outputs
-          cat > terraform.tfvars <<EOF
-          environment = "${{ github.event.inputs.environment || 'dev' }}"
-          cluster_name = "mlflow-cluster-${{ github.event.inputs.environment || 'dev' }}"
-          db_password = "${{ env.DB_PASSWORD }}"
-          region = "${{ env.AWS_REGION }}"
-          bucket_name = "mlflow-backend-${{ github.event.inputs.environment || 'dev' }}"
-          mlflow_user = "mlflow-user-${{ github.event.inputs.environment || 'dev' }}"
-          EOF
-          
-          # Initialize and plan with upgrade flag
-          terraform init -upgrade
-          terraform plan -out=tfplan
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
-      - name: Set VPC Variables
-        run: |
-          # Set VPC variables based on whether we created a new VPC or using existing
-          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
-            echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
-            echo "PUBLIC_SUBNET_IDS=${{ steps.check_vpc.outputs.PUBLIC_SUBNET_IDS }}" >> $GITHUB_ENV
-            echo "PRIVATE_SUBNET_IDS=${{ steps.check_vpc.outputs.PRIVATE_SUBNET_IDS }}" >> $GITHUB_ENV
-          else
-            echo "VPC_ID=${{ steps.vpc_outputs.outputs.VPC_ID }}" >> $GITHUB_ENV
-            echo "PUBLIC_SUBNET_IDS=${{ steps.vpc_outputs.outputs.PUBLIC_SUBNET_IDS }}" >> $GITHUB_ENV
-            echo "PRIVATE_SUBNET_IDS=${{ steps.vpc_outputs.outputs.PRIVATE_SUBNET_IDS }}" >> $GITHUB_ENV
-          fi
-        env:
-          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
-
-      - name: Apply Terraform
+      - name: Terraform Apply
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
-          # Initialize Terraform with upgrade flag
           terraform init -upgrade
-          
-          # Create and apply plan in one step to avoid stale plan issues
           terraform plan -out=tfplan
-          terraform apply -auto-approve tfplan
-          
-          # Import existing resources if they exist
-          if aws s3 ls mlflow-backend 2>/dev/null; then
-            echo "Importing existing S3 bucket"
-            terraform import module.s3.aws_s3_bucket.mlflow_bucket mlflow-backend
-          fi
-          
-          if aws iam get-user --user-name user 2>/dev/null; then
-            echo "Importing existing IAM user"
-            terraform import module.s3.aws_iam_user.mlflow_user user
-          fi
-          
-          if aws iam get-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access 2>/dev/null; then
-            echo "Importing existing IAM policy"
-            terraform import module.s3.aws_iam_policy.mlflow_s3_policy arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access
-          fi
-          
-          if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-dev/cluster 2>/dev/null; then
-            echo "Importing existing CloudWatch log group"
-            terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-dev/cluster
-          fi
-          
-          # Apply Terraform with retry logic for resource recreation
+
           MAX_RETRIES=3
           RETRY_DELAY=10
-          
           for ((i=1; i<=MAX_RETRIES; i++)); do
             echo "Attempt $i of $MAX_RETRIES"
             if terraform apply -auto-approve tfplan; then
@@ -478,123 +141,21 @@ jobs:
             else
               echo "Terraform apply failed, retrying in $RETRY_DELAY seconds..."
               sleep $RETRY_DELAY
-              
-              # Try to destroy and recreate problematic resources
               if [[ $i -lt $MAX_RETRIES ]]; then
                 echo "Destroying problematic resources..."
                 terraform destroy -auto-approve \
-                  -target="module.vpc.module.vpc.aws_internet_gateway.this[0]" \
                   -target="module.s3.aws_s3_bucket.mlflow_bucket" \
                   -target="module.s3.aws_iam_user.mlflow_user" \
                   -target="module.s3.aws_iam_policy.mlflow_s3_policy" \
                   -target="module.eks.module.eks.aws_cloudwatch_log_group.this[0]" \
-                  -target="module.eks.module.eks.module.kms.aws_kms_alias.this[0]" \
-                  || echo "Warning: Some resources could not be destroyed, continuing..."
+                  -target="module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"
               fi
             fi
           done
-          
-          # If all retries failed, fail the build
+
           if [[ $? -ne 0 ]]; then
             echo "All attempts failed. Please check the logs for details."
             exit 1
           fi
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
-      - name: Verify Resources
-        if: ${{ env.TF_ACTION == 'apply' }}
-        run: |
-          echo "=== Verifying Resource Creation ==="
-          
-          # Check S3 bucket
-          if aws s3 ls mlflow-backend 2>/dev/null; then
-            echo "✅ S3 bucket exists"
-          else
-            echo "❌ S3 bucket does not exist"
-            exit 1
-          fi
-          
-          # Check IAM user
-          if aws iam get-user --user-name user 2>/dev/null; then
-            echo "✅ IAM user exists"
-          else
-            echo "❌ IAM user does not exist"
-            exit 1
-          fi
-          
-          # Check IAM policy
-          if aws iam get-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access 2>/dev/null; then
-            echo "✅ IAM policy exists"
-          else
-            echo "❌ IAM policy does not exist"
-            exit 1
-          fi
-          
-          # Check KMS alias
-          if aws kms describe-key --key-id alias/eks/mlflow-cluster-dev 2>/dev/null; then
-            echo "✅ KMS alias exists"
-          else
-            echo "❌ KMS alias does not exist"
-            exit 1
-          fi
-          
-          # Check CloudWatch log group
-          if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-dev/cluster 2>/dev/null; then
-            echo "✅ CloudWatch log group exists"
-          else
-            echo "❌ CloudWatch log group does not exist"
-            exit 1
-          fi
-          
-          # Check VPC
-          vpc_id=$(terraform output -json | jq -r '.vpc_id.value')
-          if [[ -n "$vpc_id" && "$vpc_id" =~ ^vpc- ]]; then
-            echo "✅ VPC exists with ID: $vpc_id"
-          else
-            echo "❌ VPC does not exist or invalid ID"
-            exit 1
-          fi
-          
-          echo "=== Resource Verification Complete ==="
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
-      - name: Terraform Plan
-        if: ${{ env.TF_ACTION == 'plan' }}
-        run: terraform plan -out=tfplan
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
-      - name: Terraform Destroy
-        if: ${{ env.TF_ACTION == 'destroy' }}
-        run: terraform destroy -auto-approve
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
-      - name: Save Terraform State
-        if: ${{ env.TF_ACTION == 'apply' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-state
-          path: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}/terraform.tfstate
-
-      - name: Get Outputs
-        if: ${{ env.TF_ACTION == 'apply' }}
-        run: |
-          terraform output -json > terraform-outputs.json
-          cat terraform-outputs.json
-        id: get_outputs
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
-      - name: Save Outputs
-        if: ${{ env.TF_ACTION == 'apply' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-outputs
-          path: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}/terraform-outputs.json
-
-      - name: Cleanup
-        if: ${{ env.TF_ACTION == 'destroy' }}
-        run: |
-          rm -f terraform.tfstate
-          rm -f terraform.tfstate.backup
-          rm -f terraform.tfvars
-          rm -f terraform-outputs.json
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
