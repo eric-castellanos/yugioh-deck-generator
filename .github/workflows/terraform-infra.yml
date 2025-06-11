@@ -412,16 +412,16 @@ jobs:
           terraform import aws_cloudwatch_log_group.eks ${AWS_REGION}_aws_eks_${{ github.event.inputs.environment }}_cluster
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
-      - name: Create Terraform Plan
-        if: ${{ env.TF_ACTION == 'apply' }}
-        run: |
-          # Create a plan file
-          terraform plan -out=tfplan
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
       - name: Apply Terraform
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
+          # Initialize Terraform with upgrade flag
+          terraform init -upgrade
+          
+          # Create and apply plan in one step to avoid stale plan issues
+          terraform plan -out=tfplan
+          terraform apply -auto-approve tfplan
+          
           # Import existing resources if they exist
           if aws s3 ls mlflow-backend 2>/dev/null; then
             echo "Importing existing S3 bucket"

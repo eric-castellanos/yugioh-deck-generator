@@ -76,7 +76,10 @@
                 "ec2:DescribeInternetGateways",
                 "ec2:DescribeRouteTables",
                 "ec2:DescribeNetworkAcls",
-                "ec2:ReplaceRouteTableAssociation"
+                "ec2:ReplaceRouteTableAssociation",
+                "ec2:DisassociateRouteTable",
+                "ec2:DeleteNetworkInterface",
+                "ec2:DescribeNetworkInterfaces"
             ],
             "Resource": [
                 "arn:aws:ec2:*:*:vpc/*",
@@ -86,6 +89,19 @@
                 "arn:aws:ec2:*:*:network-acl/*",
                 "arn:aws:ec2:*:*:security-group/*"
             ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "iam:ListGroupsForUser",
+                "iam:RemoveUserFromGroup",
+                "iam:DeleteUser",
+                "iam:DeletePolicy",
+                "iam:DeletePolicyVersion",
+                "iam:DeleteRole",
+                "iam:DeleteRolePolicy"
+            ],
+            "Resource": "*"
         },
         {
             "Effect": "Allow",
@@ -107,25 +123,40 @@
                 "iam:ListRolePolicies",
                 "iam:GetUser",
                 "iam:GetRolePolicy",
-                "iam:ListAttachedRolePolicies",
+                "iam:ListAttachedRolePolicies"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
                 "s3:CreateBucket",
                 "s3:PutObject",
                 "s3:GetObject",
                 "s3:ListBucket",
                 "s3:DeleteBucket",
-                "s3:DeleteObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": "arn:aws:s3:::mlflow-backend*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
                 "logs:CreateLogGroup",
                 "logs:CreateLogStream",
                 "logs:PutLogEvents",
                 "logs:TagResource",
-                "logs:PutRetentionPolicy",
+                "logs:PutRetentionPolicy"
+            ],
+            "Resource": "arn:aws:logs:*:*:log-group:/aws/eks/*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
                 "rds:CreateDBSubnetGroup",
                 "rds:DescribeDBSubnetGroups",
                 "rds:ListTagsForResource",
-                "rds:DeleteDBSubnetGroup",
-                "ec2:DisassociateRouteTable",
-                "ec2:DeleteNetworkInterface",
-                "ec2:DescribeNetworkInterfaces"
+                "rds:DeleteDBSubnetGroup"
             ],
             "Resource": "*"
         }
