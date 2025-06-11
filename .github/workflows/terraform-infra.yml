@@ -118,7 +118,37 @@ jobs:
         env:
           AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
 
-      - name: Configure Terraform
+      - name: Create VPC Infrastructure
+        run: |
+          # Set environment variables
+          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
+          
+          # Configure VPC module
+          cat > vpc.tfvars <<EOF
+          environment = "${ENVIRONMENT}"
+          name = "mlflow-vpc-${ENVIRONMENT}"
+          vpc_cidr = "10.0.0.0/16"
+          azs = ["us-east-1a", "us-east-1b", "us-east-1c"]
+          public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+          private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+          EOF
+          
+          # Initialize and apply VPC module
+          terraform init
+          terraform plan -out=vpc-plan
+          terraform apply -auto-approve vpc-plan
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+
+      - name: Get VPC Outputs
+        id: get_vpc_outputs
+        run: |
+          outputs=$(terraform output -json)
+          echo "VPC_ID=$(echo $outputs | jq -r '.vpc_id.value')" >> $GITHUB_OUTPUT
+          echo "PUBLIC_SUBNET_IDS=$(echo $outputs | jq -r '.public_subnets.value | @json')" >> $GITHUB_OUTPUT
+          echo "PRIVATE_SUBNET_IDS=$(echo $outputs | jq -r '.private_subnets.value | @json')" >> $GITHUB_OUTPUT
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+
+      - name: Configure MLFlow Terraform
         run: |
           # Set fallback values if inputs are not defined (non-manual runs)
           ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
@@ -126,20 +156,11 @@ jobs:
 
           terraform init
 
-          # Get subnet and VPC info from AWS
-          SUBNET_IDS=$(aws ec2 describe-subnets \
-            --query "Subnets[?Tags[?Key=='Environment' && Value=='${ENVIRONMENT}']].SubnetId" \
-            --output text)
-
-          VPC_ID=$(aws ec2 describe-vpcs \
-            --query "Vpcs[?Tags[?Key=='Environment' && Value=='${ENVIRONMENT}']].VpcId" \
-            --output text)
-
-          # Create terraform.tfvars
+          # Create terraform.tfvars using VPC outputs
           cat > terraform.tfvars <<EOF
           environment = "${ENVIRONMENT}"
           cluster_name = "${CLUSTER_NAME}"
-          subnet_ids = [${SUBNET_IDS}]
+          subnet_ids = ${VPC_PUBLIC_SUBNET_IDS}
           vpc_id = "${VPC_ID}"
           db_password = "${{ env.DB_PASSWORD }}"
           EOF
