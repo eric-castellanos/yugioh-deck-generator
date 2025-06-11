@@ -183,18 +183,43 @@ jobs:
               aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query "SecurityGroups[?GroupName!='default'].GroupId" --output text | tr '\t' '\n' | while read -r sg; do
                 if [[ -n "$sg" && "$sg" =~ ^sg- ]]; then
                   echo "Processing security group: $sg"
+                  retries=3
+                  while [[ $retries -gt 0 ]]; do
+                    # Check for attached ENIs
+                    attached_enis=$(aws ec2 describe-network-interfaces --filters Name=group-id,Values=$sg --query 'NetworkInterfaces[*].NetworkInterfaceId' --output text)
+                    if [[ -n "$attached_enis" ]]; then
+                      echo "Security group $sg has attached ENIs: $attached_enis"
+                      for eni in $attached_enis; do
+                        echo "Attempting to delete ENI $eni..."
+                        aws ec2 delete-network-interface --network-interface-id "$eni" || echo "Could not delete ENI $eni (still in use)"
+                      done
+                      echo "Waiting 5 seconds after ENI cleanup..."
+                      sleep 5
+                    fi
 
-                  attached_enis=$(aws ec2 describe-network-interfaces --filters Name=group-id,Values=$sg --query 'NetworkInterfaces[*].NetworkInterfaceId' --output text)
-                  if [[ -n "$attached_enis" ]]; then
-                    echo "Security group $sg is still attached to ENIs: $attached_enis"
-                    for eni in $attached_enis; do
-                      echo "Trying to delete ENI $eni using SG $sg"
-                      aws ec2 delete-network-interface --network-interface-id "$eni" || echo "Could not delete ENI $eni (still in use)"
-                    done
+                    # Check for instances using this security group
+                    instances=$(aws ec2 describe-instances --filters "Name=network-interface.group-id,Values=$sg" --query 'Reservations[*].Instances[*].[InstanceId]' --output text)
+                    if [[ -n "$instances" ]]; then
+                      echo "Security group $sg is still used by instances: $instances"
+                      echo "Waiting 10 seconds for instances to terminate..."
+                      sleep 10
+                    fi
+
+                    # Try to delete the security group
+                    echo "Attempting to delete security group: $sg (attempt $((4 - retries)))"
+                    if aws ec2 delete-security-group --group-id "$sg" 2>/dev/null; then
+                      echo "Successfully deleted security group: $sg"
+                      break
+                    else
+                      echo "Failed to delete security group $sg, retrying..."
+                      sleep 5
+                      retries=$((retries - 1))
+                    fi
+                  done
+
+                  if [[ $retries -eq 0 ]]; then
+                    echo "Could not delete security group $sg after multiple attempts"
                   fi
-
-                  echo "Deleting security group: $sg"
-                  aws ec2 delete-security-group --group-id "$sg" || echo "Security group $sg could not be deleted (dependencies may still exist)"
                 fi
               done
 

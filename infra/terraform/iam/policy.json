@@ -94,7 +94,10 @@
                 "logs:PutLogEvents",
                 "logs:TagResource",
                 "rds:CreateDBSubnetGroup",
-                "rds:DescribeDBSubnetGroups"
+                "rds:DescribeDBSubnetGroups",
+                "ec2:DisassociateRouteTable",
+                "ec2:DeleteNetworkInterface",
+                "ec2:DescribeNetworkInterfaces"
             ],
             "Resource": "*"
         }
