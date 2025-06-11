@@ -18,6 +18,11 @@ variable "subnet_ids" {
   type = list(string)
 }
 
+variable "region" {
+  description = "AWS region for RDS"
+  type        = string
+}
+
 variable "db_instance_class" {
   default = "db.t3.micro"
 }

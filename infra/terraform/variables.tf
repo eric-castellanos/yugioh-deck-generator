@@ -8,6 +8,12 @@ variable "region" {
   default = "us-east-1"
 }
 
+variable "environment" {
+  description = "Environment (dev/prod)"
+  type        = string
+  default     = "dev"
+}
+
 variable "cluster_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string

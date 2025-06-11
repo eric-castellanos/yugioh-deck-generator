@@ -1,6 +1,6 @@
-variable "aws_region" {
+variable "region" {
     type = string
-    description = "Region where AWS account is located"
+    description = "AWS region for S3"
     default = "us-east-1"
 }
 
