@@ -30,6 +30,6 @@ resource "aws_iam_policy" "mlflow_s3_policy" {
 }
 
 resource "aws_iam_user_policy_attachment" "attach_mlflow_policy" {
-    user = aws_iam_user.mlflow_user
+    user = aws_iam_user.mlflow_user.name
     policy_arn = aws_iam_policy.mlflow_s3_policy.arn
 }
