@@ -158,12 +158,19 @@ jobs:
             done
             
             # Get all security groups in this VPC
-            sgs=$(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query 'SecurityGroups[*].[GroupId,GroupName]' --output text)
-            while read -r sg name; do
-              # Skip the default security group
-              if [[ "$name" != "default" ]]; then
-                echo "Deleting security group: $sg"
-                aws ec2 delete-security-group --group-id "$sg"
+            echo "Getting security groups for VPC: $vpc_id"
+            aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query 'SecurityGroups[*].[GroupId,GroupName]' --output text | while read -r sg name; do
+              if [[ -n "$sg" && "$sg" =~ ^sg- ]]; then
+                echo "Found security group: $sg ($name)"
+                # Skip the default security group
+                if [[ "$name" != "default" ]]; then
+                  echo "Deleting security group: $sg"
+                  aws ec2 delete-security-group --group-id "$sg"
+                else
+                  echo "Skipping default security group: $sg"
+                fi
+              else
+                echo "Skipping invalid security group ID: $sg"
               fi
             done
             
