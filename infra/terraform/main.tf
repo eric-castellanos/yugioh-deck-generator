@@ -8,6 +8,7 @@ module "s3" {
   source = "./s3"
   region = var.region
   bucket_name = "mlflow-backend-${var.environment}"
+  mlflow_user = var.mlflow_user
 }
 
 module "rds" {
