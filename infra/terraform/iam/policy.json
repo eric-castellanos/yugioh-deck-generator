@@ -26,7 +26,8 @@
             "Effect": "Allow",
             "Action": [
                 "iam:TagPolicy",
-                "iam:GetPolicy"
+                "iam:GetPolicy",
+                "iam:GetPolicyVersion"
             ],
             "Resource": "*"
         },

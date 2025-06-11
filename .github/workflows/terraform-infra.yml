@@ -415,6 +415,28 @@ jobs:
       - name: Apply Terraform
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
+          # Check if resources exist and skip creation if they do
+          if aws s3 ls mlflow-backend 2>/dev/null; then
+            echo "S3 bucket already exists, skipping creation"
+          fi
+          
+          if aws iam get-user --user-name user 2>/dev/null; then
+            echo "IAM user already exists, skipping creation"
+          fi
+          
+          if aws iam get-policy --policy-arn arn:aws:iam::${AWS_ACCOUNT_ID}:policy/mlflow-s3-access 2>/dev/null; then
+            echo "IAM policy already exists, skipping creation"
+          fi
+          
+          if aws kms describe-key --key-id alias/eks/mlflow-cluster-dev 2>/dev/null; then
+            echo "KMS alias already exists, skipping creation"
+          fi
+          
+          if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-dev/cluster 2>/dev/null; then
+            echo "CloudWatch log group already exists, skipping creation"
+          fi
+          
+          # Apply Terraform with replace flags
           terraform apply -auto-approve \
             -replace=module.rds.aws_db_subnet_group.mlflow \
             -replace=module.s3.aws_s3_bucket.mlflow_bucket \
