@@ -144,11 +144,10 @@ jobs:
       - name: Check VPC Limits and Cleanup
         run: |
           echo "Checking VPC limits and cleaning up..."
-          
           aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId]' --output text | while read -r vpc_id; do
             if [[ -n "$vpc_id" && "$vpc_id" =~ ^vpc- ]]; then
               echo "Found VPC: $vpc_id"
-              
+
               # Delete all subnets with dependency handling
               echo "Getting subnets for VPC: $vpc_id"
               subnets=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --query 'Subnets[*].[SubnetId]' --output text)
@@ -156,44 +155,55 @@ jobs:
               for subnet in "${subnet_ids[@]}"; do
                 if [[ -n "$subnet" && "$subnet" =~ ^subnet- ]]; then
                   echo "Processing subnet: $subnet"
-                  
+
                   dependencies=$(aws ec2 describe-network-interfaces --filters Name=subnet-id,Values=$subnet --query 'NetworkInterfaces[*].[NetworkInterfaceId]' --output text)
                   for eni in $dependencies; do
                     echo "Deleting network interface: $eni"
                     aws ec2 delete-network-interface --network-interface-id "$eni" || echo "Could not delete ENI $eni"
                   done
-                  
+
                   nat_gws=$(aws ec2 describe-nat-gateways --filter "Name=subnet-id,Values=$subnet" --query 'NatGateways[*].NatGatewayId' --output text)
                   for ngw in $nat_gws; do
                     echo "Deleting NAT gateway: $ngw"
                     aws ec2 delete-nat-gateway --nat-gateway-id "$ngw" || echo "Could not delete NAT gateway $ngw"
                   done
-                  
+
                   echo "Attempting to delete subnet: $subnet"
                   aws ec2 delete-subnet --subnet-id "$subnet" || echo "Subnet $subnet could not be deleted (dependencies may still exist)"
                 else
                   echo "Skipping invalid subnet ID: $subnet"
                 fi
               done
-              
+
               echo "Waiting 10 seconds after subnet cleanup..."
               sleep 10
-              
+
               # Delete non-default security groups
               echo "Getting security groups for VPC: $vpc_id"
               aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$vpc_id" --query "SecurityGroups[?GroupName!='default'].GroupId" --output text | tr '\t' '\n' | while read -r sg; do
                 if [[ -n "$sg" && "$sg" =~ ^sg- ]]; then
+                  echo "Processing security group: $sg"
+
+                  attached_enis=$(aws ec2 describe-network-interfaces --filters Name=group-id,Values=$sg --query 'NetworkInterfaces[*].NetworkInterfaceId' --output text)
+                  if [[ -n "$attached_enis" ]]; then
+                    echo "Security group $sg is still attached to ENIs: $attached_enis"
+                    for eni in $attached_enis; do
+                      echo "Trying to delete ENI $eni using SG $sg"
+                      aws ec2 delete-network-interface --network-interface-id "$eni" || echo "Could not delete ENI $eni (still in use)"
+                    done
+                  fi
+
                   echo "Deleting security group: $sg"
                   aws ec2 delete-security-group --group-id "$sg" || echo "Security group $sg could not be deleted (dependencies may still exist)"
                 fi
               done
-              
+
               # Get route tables and process each one
               echo "Getting route tables for VPC: $vpc_id"
               aws ec2 describe-route-tables --filters "Name=vpc-id,Values=$vpc_id" --query 'RouteTables[*].RouteTableId' --output text | tr '\t' '\n' | while read -r rt; do
                 if [[ -n "$rt" && "$rt" =~ ^rtb- ]]; then
                   echo "Processing route table: $rt"
-                  
+
                   main_assoc_id=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`true`].RouteTableAssociationId' --output text)
                   if [[ -n "$main_assoc_id" ]]; then
                     echo "Route table $rt is main, creating temporary replacement..."
@@ -201,26 +211,31 @@ jobs:
                     aws ec2 replace-route-table-association --association-id "$main_assoc_id" --route-table-id "$temp_rt"
                     echo "Main route table replaced with $temp_rt"
                   fi
-                  
+
+                  associations=$(aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Associations[?Main==`false`].RouteTableAssociationId' --output text)
+                  for assoc in $associations; do
+                    echo "Disassociating route table from subnet (assoc ID: $assoc)"
+                    aws ec2 disassociate-route-table --association-id "$assoc"
+                  done
+
                   aws ec2 describe-route-tables --route-table-ids "$rt" --query 'RouteTables[0].Routes[?GatewayId!=`local`].[DestinationCidrBlock,GatewayId]' --output text | while read -r dest gw; do
                     if [[ -n "$dest" && -n "$gw" ]]; then
                       echo "Deleting route: $dest (Gateway: $gw) from route table: $rt"
                       aws ec2 delete-route --route-table-id "$rt" --destination-cidr-block "$dest"
                     fi
                   done
-                  
+
                   echo "Deleting route table: $rt"
-                  aws ec2 delete-route-table --route-table-id "$rt"
+                  aws ec2 delete-route-table --route-table-id "$rt" || echo "Route table $rt could not be deleted (dependencies may still exist)"
                 else
                   echo "Skipping invalid route table ID: $rt"
                 fi
               done
-              
+
               # Delete non-default NACLs
               echo "Getting NACLs for VPC: $vpc_id"
               nacls=$(aws ec2 describe-network-acls --filters "Name=vpc-id,Values=$vpc_id" --query 'NetworkAcls[?IsDefault==`false`].NetworkAclId' --output text)
               if [[ -n "$nacls" ]]; then
-                echo "Found non-default NACLs: $nacls"
                 for nacl_id in $nacls; do
                   echo "Deleting network ACL: $nacl_id"
                   retries=3
@@ -241,10 +256,10 @@ jobs:
               else
                 echo "No non-default NACLs found"
               fi
-              
+
               echo "Deleting VPC: $vpc_id"
               aws ec2 delete-vpc --vpc-id "$vpc_id" || echo "VPC $vpc_id could not be deleted (dependencies may still exist)"
-              
+
               echo "Waiting 10 seconds after VPC deletion..."
               sleep 10
             else
@@ -252,7 +267,6 @@ jobs:
             fi
           done
         working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
-      
 
       - name: Create VPC Infrastructure
         if: steps.check_vpc.outputs.VPC_EXISTS != 'true'
