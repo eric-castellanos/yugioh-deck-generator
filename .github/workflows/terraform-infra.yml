@@ -121,7 +121,7 @@ jobs:
             terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
           fi
           if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
-            terraform import module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
+            terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
           fi
 
           terraform state list || echo "No state yet"
