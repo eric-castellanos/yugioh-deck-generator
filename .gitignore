@@ -31,7 +31,7 @@
 __pycache__/
 
 # Terraform
-*.terraform/
+**.terraform/
 *.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
@@ -41,4 +41,9 @@ terraform.tfvars
 *.tfplan
 *.tfplan.*
 *.tfbackup
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/*.tfplan.*
+**/*.tfbackup
 
