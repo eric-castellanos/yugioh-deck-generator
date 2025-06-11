@@ -118,7 +118,31 @@ jobs:
         env:
           AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
 
+      - name: Check Existing VPCs
+        id: check_vpc
+        run: |
+          # Check if VPC with the same name already exists
+          VPC_NAME="mlflow-vpc-${{ github.event.inputs.environment || 'dev' }}"
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment || 'dev' }}" --query 'Vpcs[0].VpcId' --output text)
+          
+          if [ -n "$VPC_ID" ]; then
+            echo "Found existing VPC: $VPC_ID"
+            echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
+            echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
+            
+            # Get existing subnets
+            PUBLIC_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Type,Values=public" --query 'Subnets[*].SubnetId' --output json)
+            PRIVATE_SUBNETS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:Type,Values=private" --query 'Subnets[*].SubnetId' --output json)
+            echo "PUBLIC_SUBNET_IDS=$PUBLIC_SUBNETS" >> $GITHUB_OUTPUT
+            echo "PRIVATE_SUBNET_IDS=$PRIVATE_SUBNETS" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
+        working-directory: ${{ github.workspace }}/${{ inputs.source_dir || 'infra/terraform/vpc' }}
+
       - name: Create VPC Infrastructure
+        if: steps.check_vpc.outputs.VPC_EXISTS != 'true'
         run: |
           # Set environment variables
           ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
