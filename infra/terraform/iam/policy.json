@@ -25,6 +25,13 @@
         {
             "Effect": "Allow",
             "Action": [
+                "iam:TagPolicy"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
                 "ec2:DescribeVpcs",
                 "ec2:DescribeSubnets",
                 "ec2:CreateVpc",

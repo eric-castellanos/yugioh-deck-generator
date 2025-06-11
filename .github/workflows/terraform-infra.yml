@@ -411,9 +411,17 @@ jobs:
           terraform import aws_cloudwatch_log_group.eks ${AWS_REGION}_aws_eks_${{ github.event.inputs.environment }}_cluster
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
-      - name: Terraform Apply
+      - name: Apply Terraform
         if: ${{ env.TF_ACTION == 'apply' }}
-        run: terraform apply -auto-approve tfplan
+        run: |
+          terraform apply -auto-approve \
+            -replace=module.rds.aws_db_subnet_group.mlflow \
+            -replace=module.s3.aws_s3_bucket.mlflow_bucket \
+            -replace=module.s3.aws_iam_user.mlflow_user \
+            -replace=module.s3.aws_iam_policy.mlflow_s3_policy \
+            -replace=module.eks.module.eks.aws_cloudwatch_log_group.this[0] \
+            -replace=module.eks.module.eks.aws_iam_policy.cluster_encryption[0] \
+            -replace=module.vpc.module.vpc.aws_internet_gateway.this[0] tfplan
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Plan
