@@ -8,9 +8,11 @@ module "eks" {
   vpc_id          = var.vpc_id
 
   enable_irsa     = true
-
   create_kms_key = true
-  enable_cluster_encryption_config = true
+  
+  encryption_config = {
+    resources = ["secrets"]
+  }
 
   eks_managed_node_groups = {
     default_node_group = {
