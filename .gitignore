@@ -31,10 +31,10 @@
 __pycache__/
 
 # Terraform
-.terraform/
-.terraform.lock.hcl
-*.tfstate
-*.tfstate.*
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
 terraform.tfvars
 *.tfvars
 .terragrunt-cache/
