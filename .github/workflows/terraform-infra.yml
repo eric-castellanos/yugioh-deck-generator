@@ -131,3 +131,48 @@ jobs:
           else
             echo "Terraform configuration is valid!"
           fi
+          
+      - name: Terraform Apply
+        id: terraform_apply
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: |
+          echo "Running terraform apply for ${{ env.ENVIRONMENT }} environment"
+          
+          # Verify terraform is properly set up before applying
+          terraform -v
+          
+          # Run the apply with proper error handling
+          echo "Applying terraform configuration..."
+          terraform apply -auto-approve -input=false -var-file=terraform.tfvars
+          APPLY_STATUS=$?
+          
+          if [ $APPLY_STATUS -ne 0 ]; then
+            echo "Terraform apply failed. Check the logs for more details."
+            exit $APPLY_STATUS
+          else
+            echo "Terraform apply completed successfully!"
+            
+            # Output some useful information about the created resources
+            echo "Outputting created resource information:"
+            terraform output
+          fi
+          
+      - name: Terraform Destroy
+        id: terraform_destroy
+        if: ${{ env.TF_ACTION == 'destroy' }}
+        run: |
+          echo "Running terraform destroy for ${{ env.ENVIRONMENT }} environment"
+          
+          # Confirm destruction intent in logs
+          echo "WARNING: About to destroy all resources in ${{ env.ENVIRONMENT }} environment"
+          
+          # Run the destroy with proper error handling
+          terraform destroy -auto-approve -input=false -var-file=terraform.tfvars
+          DESTROY_STATUS=$?
+          
+          if [ $DESTROY_STATUS -ne 0 ]; then
+            echo "Terraform destroy failed. Check the logs for more details."
+            exit $DESTROY_STATUS
+          else
+            echo "Terraform destroy completed successfully. All resources have been removed."
+          fi
