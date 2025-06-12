@@ -120,8 +120,7 @@ jobs:
 
       - name: Terraform Init
         id: terraform_init
-        run: |
-          terraform init -upgrade
+        run: terraform init -upgrade
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Install jq
