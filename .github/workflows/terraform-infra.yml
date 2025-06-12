@@ -156,7 +156,7 @@ jobs:
           fi
 
           # KMS Alias
-          KMS_ALIAS="arn:aws:kms:us-east-1:256995722813:alias/eks/${CLUSTER_NAME}"
+          KMS_ALIAS="alias/eks/${CLUSTER_NAME}"
           echo "Checking for KMS Alias: $KMS_ALIAS"
           if aws kms list-aliases | grep -q "$KMS_ALIAS"; then
             if ! terraform state list module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] 2>/dev/null; then
