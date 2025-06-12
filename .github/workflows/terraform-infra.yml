@@ -48,6 +48,11 @@ jobs:
   terraform:
     name: Terraform
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ github.workspace }}/${{ github.event.inputs.source_dir || 'infra/terraform' }}
     env:
       TF_ACTION: ${{ github.event.inputs.action || 'plan' }}
       TF_SOURCE_DIR: ${{ github.event.inputs.source_dir || 'infra/terraform' }}
@@ -67,20 +72,62 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.0
+          terraform_wrapper: false  # Disable wrapper to avoid issues with shell commands
 
       - name: Create terraform.tfvars
         run: |
+          # Create the file with a temporary placeholder for password
           cat > terraform.tfvars <<EOF
           environment = "${{ env.ENVIRONMENT }}"
           cluster_name = "mlflow-cluster-${{ env.ENVIRONMENT }}"
-          db_password = "${{ secrets.DB_PASSWORD }}"
+          db_password = "temporarily_replaced_password"
           region = "${{ env.AWS_REGION }}"
           EOF
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+          
+          # Replace the placeholder with actual password using sed to avoid GitHub Actions workflow syntax issues
+          sed -i "s/temporarily_replaced_password/${{ secrets.DB_PASSWORD }}/g" terraform.tfvars
+          
+          # Display the tfvars file (without showing sensitive values)
+          cat terraform.tfvars | grep -v "db_password"
 
       - name: Terraform Init
-        run: terraform init -upgrade
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        id: terraform_init
+        run: |
+          terraform init -upgrade
+          INIT_STATUS=$?
+          if [ $INIT_STATUS -ne 0 ]; then
+            echo "Terraform init failed. Check the logs for more details."
+            exit $INIT_STATUS
+          fi
+        
+      - name: Terraform Plan
+        id: terraform_plan
+        if: ${{ env.TF_ACTION == 'plan' || github.event_name != 'workflow_dispatch' }}
+        run: |
+          echo "Running terraform plan for ${{ env.ENVIRONMENT }} environment"
+          
+          # Verify terraform is properly set up
+          terraform -v
+          
+          # Run the plan with proper error handling
+          terraform plan -input=false -var-file=terraform.tfvars
+          PLAN_STATUS=$?
+          
+          if [ $PLAN_STATUS -ne 0 ]; then
+            echo "Terraform plan failed. Check the logs for more details."
+            exit $PLAN_STATUS
+          fi
+        
+      - name: Terraform Validate
+        id: terraform_validate
+        run: |
+          echo "Validating Terraform configuration..."
+          terraform validate
+          VALIDATE_STATUS=$?
+          
+          if [ $VALIDATE_STATUS -ne 0 ]; then
+            echo "Terraform validation failed. Please check your configuration files."
+            exit $VALIDATE_STATUS
+          else
+            echo "Terraform configuration is valid!"
+          fi
