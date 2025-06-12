@@ -113,7 +113,7 @@ jobs:
           # First, let's check for the RDS database instance
           DB_INSTANCE_ID="mlflow-db-${{ env.ENVIRONMENT }}"
           echo "Checking for RDS instance: $DB_INSTANCE_ID"
-          DB_EXISTS=$(aws rds describe-db-instances --query "DBInstances[?DBInstanceIdentifier=='$DB_INSTANCE_ID'].DBInstanceIdentifier" --output text || echo "")
+          DB_EXISTS=$(aws rds describe-db-instances --query "DBInstances[?DBInstanceIdentifier=='$DB_INSTANCE_ID'].DBInstanceIdentifier" --output text || echo "") | grep -o "exists"
           
           if [ ! -z "$DB_EXISTS" ] && [ "$DB_EXISTS" != "None" ]; then
             echo "Found existing RDS instance: $DB_EXISTS"
@@ -132,7 +132,7 @@ jobs:
           # Check for EKS cluster
           CLUSTER_NAME="mlflow-eks-cluster-${{ env.ENVIRONMENT }}"
           echo "Checking for EKS cluster: $CLUSTER_NAME"
-          CLUSTER_EXISTS=$(aws eks describe-cluster --name $CLUSTER_NAME --query "cluster.name" --output text 2>/dev/null || echo "")
+          CLUSTER_EXISTS=$(aws eks describe-cluster --name $CLUSTER_NAME --query "cluster.name" --output text 2>/dev/null || echo "") | grep -o "exists"
 
           if [ ! -z "$CLUSTER_EXISTS" ] && [ "$CLUSTER_EXISTS" != "None" ]; then
             echo "Found existing EKS cluster: $CLUSTER_EXISTS"
@@ -151,7 +151,8 @@ jobs:
           # Check for S3 bucket
           BUCKET_NAME="mlflow-backend-${{ env.ENVIRONMENT }}"
           echo "Checking for S3 bucket: $BUCKET_NAME"
-          BUCKET_EXISTS=$(aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null && echo "exists" || echo "")
+          BUCKET_EXISTS=(aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null && echo "exists" || echo "") | grep -o "exists"
+
           
           if [ "$BUCKET_EXISTS" == "exists" ]; then
             echo "Found existing S3 bucket: $BUCKET_NAME"
