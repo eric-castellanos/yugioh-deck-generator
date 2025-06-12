@@ -96,10 +96,11 @@ jobs:
 
       - name: Set VPC Variables
         run: |
+          terraform init -input=false -backend=false
           if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
             echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
           else
-            VPC_ID_OUTPUT=$(terraform output -raw vpc_id 2>/dev/null)
+            VPC_ID_OUTPUT=$(terraform output -raw vpc_id 2>/dev/null || true)
             if [ -n "$VPC_ID_OUTPUT" ]; then
               echo "VPC_ID=$VPC_ID_OUTPUT" >> $GITHUB_ENV
             else
