@@ -105,56 +105,87 @@ jobs:
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
           echo "Checking for existing resources in ${{ env.ENVIRONMENT }} environment..."
-
           echo "Current timestamp: $(date -u "+%Y-%m-%d %H:%M:%S")"
           echo "Running as user: $(whoami)"
 
-          # RDS Database Check
+          # RDS Database
           DB_INSTANCE_ID="mlflow-db-${{ env.ENVIRONMENT }}"
           echo "Checking for RDS instance: $DB_INSTANCE_ID"
-          
           if aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE_ID" >/dev/null 2>&1; then
             echo "Found existing RDS instance: $DB_INSTANCE_ID"
-            if ! terraform state list aws_db_instance.mlflow_db 2>/dev/null; then
-              echo "Importing RDS instance into Terraform state..."
+            if ! terraform state list module.rds.aws_db_instance.mlflow_db 2>/dev/null; then
+              echo "Importing RDS instance..."
               terraform import module.rds.aws_db_instance.mlflow_db "$DB_INSTANCE_ID"
-            else
-              echo "RDS instance already exists in Terraform state."
             fi
-          else
-            echo "No existing RDS instance found with ID: $DB_INSTANCE_ID"
           fi
 
-          # EKS Cluster Check
+          # EKS Cluster
           CLUSTER_NAME="mlflow-eks-cluster-${{ env.ENVIRONMENT }}"
           echo "Checking for EKS cluster: $CLUSTER_NAME"
-
           if aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
             echo "Found existing EKS cluster: $CLUSTER_NAME"
-            if ! terraform state list aws_eks_cluster.mlflow_cluster 2>/dev/null; then
-              echo "Importing EKS cluster into Terraform state..."
+            if ! terraform state list module.eks.aws_eks_cluster.mlflow_cluster 2>/dev/null; then
               terraform import module.eks.aws_eks_cluster.mlflow_cluster "$CLUSTER_NAME"
-            else
-              echo "EKS cluster already exists in Terraform state."
             fi
-          else
-            echo "No existing EKS cluster found with name: $CLUSTER_NAME"
           fi
 
-          # S3 Bucket Check
+          # EKS Log Group
+          LOG_GROUP_NAME="/aws/eks/${CLUSTER_NAME}/cluster"
+          if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP_NAME" | grep -q "$LOG_GROUP_NAME"; then
+            echo "Found EKS log group: $LOG_GROUP_NAME"
+            if ! terraform state list module.eks.aws_cloudwatch_log_group.this[0] 2>/dev/null; then
+              terraform import module.eks.aws_cloudwatch_log_group.this[0] "$LOG_GROUP_NAME"
+            fi
+          fi
+
+          # EKS Node Group IAM Role
+          if aws iam get-role --role-name "eks_node_group" >/dev/null 2>&1; then
+            echo "Found EKS IAM role: eks_node_group"
+            if ! terraform state list module.eks.aws_iam_role.eks_node_group 2>/dev/null; then
+              terraform import module.eks.aws_iam_role.eks_node_group "eks_node_group"
+            fi
+          fi
+
+          # KMS Key
+          KMS_KEY_ID="5dd32b2c-2af3-443b-b016-6aa30c16b6a6"
+          echo "Checking for KMS Key: $KMS_KEY_ID"
+          if aws kms describe-key --key-id "$KMS_KEY_ID" >/dev/null 2>&1; then
+            if ! terraform state list module.eks.aws_kms_key.this[0] 2>/dev/null; then
+              terraform import module.eks.aws_kms_key.this[0] "$KMS_KEY_ID"
+            fi
+          fi
+
+          # KMS Alias
+          KMS_ALIAS="arn:aws:kms:us-east-1:256995722813:alias/eks/${CLUSTER_NAME}"
+          echo "Checking for KMS Alias: $KMS_ALIAS"
+          if aws kms list-aliases | grep -q "$KMS_ALIAS"; then
+            if ! terraform state list module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] 2>/dev/null; then
+              terraform import module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] "$KMS_ALIAS"
+            fi
+          fi
+
+          # S3 Bucket
           BUCKET_NAME="mlflow-backend-${{ env.ENVIRONMENT }}"
           echo "Checking for S3 bucket: $BUCKET_NAME"
-
           if aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
-            echo "Found existing S3 bucket: $BUCKET_NAME"
-            if ! terraform state list aws_s3_bucket.mlflow_artifacts 2>/dev/null; then
-              echo "Importing S3 bucket into Terraform state..."
-              terraform import module.s3.aws_s3_bucket.mlflow_bucket "$BUCKET_NAME"
-            else
-              echo "S3 bucket already exists in Terraform state."
+            if ! terraform state list module.s3.aws_s3_bucket.mlflow_bucket[0] 2>/dev/null; then
+              terraform import module.s3.aws_s3_bucket.mlflow_bucket[0] "$BUCKET_NAME"
             fi
-          else
-            echo "No existing S3 bucket found with name: $BUCKET_NAME"
+          fi
+
+          # IAM User
+          if aws iam get-user --user-name "mlflow-user" >/dev/null 2>&1; then
+            if ! terraform state list module.s3.aws_iam_user.mlflow_user[0] 2>/dev/null; then
+              terraform import module.s3.aws_iam_user.mlflow_user[0] "mlflow-user"
+            fi
+          fi
+
+          # IAM Policy
+          POLICY_ARN="arn:aws:iam::256995722813:policy/mlflow-s3-access"
+          if aws iam get-policy --policy-arn "$POLICY_ARN" >/dev/null 2>&1; then
+            if ! terraform state list module.s3.aws_iam_policy.mlflow_s3_policy[0] 2>/dev/null; then
+              terraform import module.s3.aws_iam_policy.mlflow_s3_policy[0] "$POLICY_ARN"
+            fi
           fi
 
           echo "Resource detection and import completed."
