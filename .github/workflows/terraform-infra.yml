@@ -50,14 +50,14 @@ jobs:
   terraform:
     name: Terraform
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: './infra/terraform'  # Default working directory for all steps
     env:
       TF_ACTION: ${{ github.event.inputs.action }}
       TF_SOURCE_DIR: ${{ github.event.inputs.source_dir }}
       ENVIRONMENT: ${{ github.event.inputs.environment }}
-
-    defaults:
-      run:
-        working-directory: ${{ github.event.inputs.source_dir }}
 
     steps:
       - name: Checkout code
