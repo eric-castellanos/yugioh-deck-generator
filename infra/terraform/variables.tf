@@ -41,7 +41,7 @@ variable "mlflow_user" {
 variable "cluster_name" {
   description = "Name of the EKS cluster"
   type        = string
-  default     = "mlflow-eks-cluster"
+  default     = "mlflow-cluster"
 }
 
 variable "node_instance_type" {
