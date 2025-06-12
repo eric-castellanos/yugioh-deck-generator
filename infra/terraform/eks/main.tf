@@ -41,7 +41,7 @@ resource "aws_cloudwatch_log_group" "this" {
   retention_in_days = var.log_retention_in_days
 
   tags = {
-    Name = var.cluster_name
+    Name = local.full_cluster_name
   }
 
   lifecycle {

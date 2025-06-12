@@ -38,7 +38,7 @@ module "rds" {
 
 module "eks" {
   source                      = "./eks"
-  cluster_name                = var.cluster_name
+  cluster_name                = local.full_cluster_name
   cluster_version             = var.cluster_version
   vpc_id                      = local.final_vpc_id
   subnet_ids                  = module.vpc.private_subnet_ids
@@ -64,4 +64,8 @@ output "mlflow_bucket_name" {
 
 output "eks_cluster_name" {
   value = module.eks.cluster_name
+}
+
+locals {
+  full_cluster_name = "${var.cluster_name}-${var.environment}"  # e.g. "mlflow-cluster-dev"
 }
