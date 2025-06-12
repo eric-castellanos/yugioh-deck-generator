@@ -69,6 +69,19 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.0
+          terraform_wrapper: false  # Disable the wrapper script to use terraform directly
+      
+      - name: Verify Terraform Installation
+        run: |
+          echo "Terraform version check"
+          terraform -v
+          
+          echo "Environment verification"
+          env | grep TF || echo "No TF environment variables set"
+          
+          echo "Which terraform resolves to:"
+          which terraform
+          ls -la $(which terraform)
 
       - name: Check for existing resources
         id: check_resources
@@ -119,8 +132,14 @@ jobs:
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Init
+        id: terraform_init
         run: |
+          # Make sure terraform is correctly set up
+          which terraform
+          terraform -v
+          
           # First try normal init
+          echo "Running terraform init..."
           terraform init || {
             echo "Standard init failed, trying with more options..."
             # Try with explicit options and add -reconfigure if needed
@@ -226,6 +245,13 @@ jobs:
       - name: Terraform Apply
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
+          # Ensure terraform is working before attempting apply
+          echo "Terraform version information:"
+          terraform -v
+          echo "Terraform binary location:"
+          which terraform
+          ls -la $(which terraform)
+          
           # Use different strategies based on whether we're recreating or using existing resources
           if [[ "${{ github.event.inputs.recreate }}" == "true" ]]; then
             echo "Running in recreate mode - will attempt to create new resources"
