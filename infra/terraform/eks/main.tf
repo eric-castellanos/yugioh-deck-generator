@@ -19,21 +19,6 @@ variable "log_retention_in_days" {
   default = 30
 }
 
-resource "aws_kms_key" "this" {
-  count = var.create_resources ? 1 : 0
-}
-
-resource "aws_kms_alias" "this" {
-  count = var.create_resources ? 1 : 0
-
-  name          = "alias/eks/${local.full_cluster_name}"
-  target_key_id = aws_kms_key.this[0].id
-
-  lifecycle {
-    ignore_changes = [name]
-  }
-}
-
 resource "aws_cloudwatch_log_group" "this" {
   count = var.create_resources ? 1 : 0
 
