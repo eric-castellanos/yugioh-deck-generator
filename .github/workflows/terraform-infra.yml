@@ -55,6 +55,10 @@ jobs:
       TF_SOURCE_DIR: ${{ github.event.inputs.source_dir }}
       ENVIRONMENT: ${{ github.event.inputs.environment }}
 
+    defaults:
+      run:
+        working-directory: ${{ github.event.inputs.source_dir }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
