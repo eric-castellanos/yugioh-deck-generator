@@ -149,7 +149,7 @@ jobs:
             echo "Found existing S3 bucket: $BUCKET_NAME"
             if ! terraform state list aws_s3_bucket.mlflow_artifacts 2>/dev/null; then
               echo "Importing S3 bucket into Terraform state..."
-              terraform import aws_s3_bucket.mlflow_artifacts "$BUCKET_NAME"
+              terraform import aws_s3_bucket.mlflow_bucket "$BUCKET_NAME"
             else
               echo "S3 bucket already exists in Terraform state."
             fi
