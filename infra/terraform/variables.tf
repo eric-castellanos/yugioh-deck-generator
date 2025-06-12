@@ -14,6 +14,18 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "vpc_id" {
+  type        = string
+  description = "Optional existing VPC ID to use"
+  default     = null
+}
+
+variable "existing_resources" {
+  type        = bool
+  description = "Set to true if resources already exist and should be imported"
+  default     = false
+}
+
 variable "cluster_version" {
   description = "Kubernetes version for the EKS cluster"
   type        = string
@@ -36,4 +48,10 @@ variable "node_instance_type" {
   description = "EC2 instance type for EKS worker nodes"
   type        = string
   default     = "t3.medium"
+}
+
+variable "bucket_name" {
+  description = "Name of the S3 bucket for MLflow"
+  type        = string
+  default     = null
 }

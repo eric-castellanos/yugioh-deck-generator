@@ -51,6 +51,7 @@ jobs:
     env:
       TF_ACTION: ${{ github.event.inputs.action || 'plan' }}
       TF_SOURCE_DIR: ${{ github.event.inputs.source_dir || 'infra/terraform' }}
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
 
     steps:
       - name: Checkout code
@@ -70,12 +71,10 @@ jobs:
       - name: Create terraform.tfvars
         run: |
           cat > terraform.tfvars <<EOF
-          environment = "${{ github.event.inputs.environment }}"
-          cluster_name = "mlflow-cluster-${{ github.event.inputs.environment }}"
+          environment = "${{ env.ENVIRONMENT }}"
+          cluster_name = "mlflow-cluster-${{ env.ENVIRONMENT }}"
           db_password = "${{ secrets.DB_PASSWORD }}"
           region = "${{ env.AWS_REGION }}"
-          bucket_name = "mlflow-backend-${{ github.event.inputs.environment }}"
-          mlflow_user = "mlflow-user-${{ github.event.inputs.environment }}"
           EOF
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
@@ -86,87 +85,89 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
+      # Only run imports when action is "apply" and recreate is false
       - name: Import existing resources
         if: ${{ github.event.inputs.action == 'apply' && github.event.inputs.recreate == false }}
         run: |
-          set +e  # Continue on errors
-          
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment }}" --query 'Vpcs[0].VpcId' --output text)
-          if [ "$VPC_ID" != "None" ] && [ -n "$VPC_ID" ]; then
-            echo "Importing VPC: $VPC_ID"
-            terraform import module.vpc.module.vpc.aws_vpc.this[0] "$VPC_ID" || echo "Failed to import VPC, but continuing"
-            
-            SUBNETS_JSON=$(aws ec2 describe-subnets \
-              --filters "Name=vpc-id,Values=$VPC_ID" \
-              --query "Subnets[*].{Id:SubnetId,Name:Tags[?Key=='Name']|[0].Value}" \
-              --output json)
-            i=0
-            for row in $(echo "$SUBNETS_JSON" | jq -c '.[]'); do
-              SUBNET_ID=$(echo "$row" | jq -r '.Id')
-              NAME=$(echo "$row" | jq -r '.Name')
-              if [[ "$NAME" == *"public"* ]]; then
-                echo "Importing public subnet: $SUBNET_ID"
-                terraform import "module.vpc.module.vpc.aws_subnet.public[${i}]" "$SUBNET_ID" || echo "Failed to import subnet, continuing"
-              elif [[ "$NAME" == *"private"* ]]; then
-                echo "Importing private subnet: $SUBNET_ID"
-                terraform import "module.vpc.module.vpc.aws_subnet.private[${i}]" "$SUBNET_ID" || echo "Failed to import subnet, continuing"
-              else
-                echo "Skipping subnet $SUBNET_ID with unknown name '$NAME'"
-                continue
-              fi
-              i=$((i+1))
-            done
-            
-            IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query 'InternetGateways[0].InternetGatewayId' --output text)
-            if [ "$IGW_ID" != "None" ] && [ -n "$IGW_ID" ]; then
-              echo "Importing Internet Gateway: $IGW_ID"
-              terraform import module.vpc.module.vpc.aws_internet_gateway.this[0] "$IGW_ID" || echo "Failed to import IGW, continuing"
-            fi
-          fi
+          set +e  # Don't exit on error
+          echo "Starting resource import for environment: ${{ env.ENVIRONMENT }}"
 
-          echo "Checking S3 bucket..."
-          if aws s3api head-bucket --bucket mlflow-backend-${{ github.event.inputs.environment }} 2>/dev/null; then
-            echo "Importing S3 bucket: mlflow-backend-${{ github.event.inputs.environment }}"
-            terraform import module.s3.aws_s3_bucket.mlflow_bucket mlflow-backend-${{ github.event.inputs.environment }} || echo "Failed to import S3 bucket, continuing"
-          fi
-
-          echo "Checking IAM user..."
-          if aws iam get-user --user-name mlflow-user-${{ github.event.inputs.environment }} 2>/dev/null; then
-            echo "Importing IAM user: mlflow-user-${{ github.event.inputs.environment }}"
-            terraform import module.s3.aws_iam_user.mlflow_user mlflow-user-${{ github.event.inputs.environment }} || echo "Failed to import IAM user, continuing"
+          # Import S3 Bucket
+          echo "Checking for S3 bucket: mlflow-backend-${{ env.ENVIRONMENT }}"
+          aws s3api head-bucket --bucket mlflow-backend-${{ env.ENVIRONMENT }} 2>/dev/null
+          if [ $? -eq 0 ]; then
+            echo "Importing S3 bucket: mlflow-backend-${{ env.ENVIRONMENT }}"
+            terraform import module.s3.aws_s3_bucket.mlflow_bucket mlflow-backend-${{ env.ENVIRONMENT }}
+            echo "S3 bucket import result: $?"
+          else
+            echo "S3 bucket not found, skipping import"
           fi
           
-          echo "Checking IAM policy..."
+          # Import IAM User
+          echo "Checking for IAM user: mlflow-user-${{ env.ENVIRONMENT }}"
+          USER_CHECK=$(aws iam get-user --user-name mlflow-user-${{ env.ENVIRONMENT }} 2>&1)
+          if ! echo "$USER_CHECK" | grep -q "NoSuchEntity"; then
+            echo "Importing IAM user: mlflow-user-${{ env.ENVIRONMENT }}"
+            terraform import module.s3.aws_iam_user.mlflow_user mlflow-user-${{ env.ENVIRONMENT }}
+            echo "IAM user import result: $?"
+          else
+            echo "IAM user not found, skipping import"
+          fi
+          
+          # Import IAM Policy
+          echo "Checking for IAM policy: mlflow-s3-access"
           POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text)
           if [ -n "$POLICY_ARN" ] && [ "$POLICY_ARN" != "None" ]; then
             echo "Importing IAM policy: $POLICY_ARN"
-            terraform import module.s3.aws_iam_policy.mlflow_s3_policy "$POLICY_ARN" || echo "Failed to import IAM policy, continuing"
+            terraform import module.s3.aws_iam_policy.mlflow_s3_policy "$POLICY_ARN"
+            echo "IAM policy import result: $?"
+          else
+            echo "IAM policy not found, skipping import"
           fi
+          
+          # Import DB Subnet Group
+          echo "Checking for DB subnet group: mlflow-db-subnet-group-${{ env.ENVIRONMENT }}"
+          DB_SUBNET_CHECK=$(aws rds describe-db-subnet-groups --db-subnet-group-name mlflow-db-subnet-group-${{ env.ENVIRONMENT }} 2>&1)
+          if ! echo "$DB_SUBNET_CHECK" | grep -q "DBSubnetGroupNotFoundFault"; then
+            echo "Importing DB subnet group: mlflow-db-subnet-group-${{ env.ENVIRONMENT }}"
+            terraform import module.rds.aws_db_subnet_group.mlflow mlflow-db-subnet-group-${{ env.ENVIRONMENT }}
+            echo "DB subnet group import result: $?"
+          else
+            echo "DB subnet group not found, skipping import"
+          fi
+          
+          # Import CloudWatch Log Group
+          echo "Checking for CloudWatch log group: /aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster"
+          CW_LOG_CHECK=$(aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster 2>&1)
+          if ! echo "$CW_LOG_CHECK" | grep -q "ResourceNotFoundException"; then
+            echo "Importing CloudWatch log group: /aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster"
+            terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster
+            echo "CloudWatch log group import result: $?"
+          else
+            echo "CloudWatch log group not found, skipping import"
+          fi
+          
+          # Import KMS Alias
+          echo "Checking for KMS alias: alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
+          KMS_ALIAS_CHECK=$(aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}'].TargetKeyId" --output text)
+          if [ -n "$KMS_ALIAS_CHECK" ] && [ "$KMS_ALIAS_CHECK" != "None" ]; then
+            echo "Importing KMS alias: alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
+            terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}
+            echo "KMS alias import result: $?"
+          else
+            echo "KMS alias not found, skipping import"
+          fi
+          
+          echo "Import operations completed"
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
-          echo "Checking CloudWatch log group..."
-          if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q .; then
-            echo "Importing CloudWatch log group"
-            terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster || echo "Failed to import CloudWatch log group, continuing"
-          fi
-
-          echo "Checking KMS alias..."
-          if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
-            echo "Importing KMS alias"
-            terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ github.event.inputs.environment }} || echo "Failed to import KMS alias, continuing"
-          fi
-
-          echo "Checking DB subnet group..."
-          if aws rds describe-db-subnet-groups --db-subnet-group-name mlflow-db-subnet-group-${{ github.event.inputs.environment }} 2>/dev/null; then
-            echo "Importing DB subnet group"
-            terraform import module.rds.aws_db_subnet_group.mlflow mlflow-db-subnet-group-${{ github.event.inputs.environment }} || echo "Failed to import DB subnet group, continuing"
-          fi
-
-          echo "Checking security group..."
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=mlflow-rds-sg-${{ github.event.inputs.environment }}" --query 'SecurityGroups[0].GroupId' --output text)
-          if [ "$SG_ID" != "None" ] && [ -n "$SG_ID" ]; then
-            echo "Importing security group: $SG_ID"
-            terraform import module.rds.aws_security_group.mlflow_rds_sg "$SG_ID" || echo "Failed to import security group, continuing"
-          fi
+      # If action is apply and recreate is true, run "terraform state rm" on resources
+      - name: Remove resources from state if recreating
+        if: ${{ github.event.inputs.action == 'apply' && github.event.inputs.recreate == true }}
+        run: |
+          echo "Removing resources from state for recreation"
+          terraform state list | grep -E "(aws_s3_bucket|aws_iam_user|aws_iam_policy|aws_db_subnet_group|aws_cloudwatch_log_group|aws_kms_alias)" || echo "No matching resources in state"
+          terraform state list | grep -E "(aws_s3_bucket|aws_iam_user|aws_iam_policy|aws_db_subnet_group|aws_cloudwatch_log_group|aws_kms_alias)" | xargs -r terraform state rm
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Plan
@@ -176,7 +177,13 @@ jobs:
 
       - name: Terraform Apply
         if: ${{ env.TF_ACTION == 'apply' }}
-        run: terraform apply -auto-approve -input=false -var-file=terraform.tfvars
+        run: |
+          # Add flags to target only specific resources that need to be created
+          IMPORT_STATUS=$?
+          if [[ $IMPORT_STATUS -ne 0 && "${{ github.event.inputs.recreate }}" == "false" ]]; then
+            echo "Warning: Import operations didn't complete successfully. Apply may fail for existing resources."
+          fi
+          terraform apply -auto-approve -input=false -var-file=terraform.tfvars
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Destroy
