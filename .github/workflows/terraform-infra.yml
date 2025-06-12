@@ -91,7 +91,7 @@ jobs:
             echo "has_vpc=true" >> $GITHUB_OUTPUT
             echo "vpc_id=$EXISTING_VPC" >> $GITHUB_OUTPUT
           fi
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+        working-directory: ${{ github.event.inputs.source_dir }}
 
       - name: Create terraform.tfvars
         run: |
@@ -117,7 +117,7 @@ jobs:
           
           # Display the tfvars file (mask sensitive values)
           cat terraform.tfvars | grep -v "db_password"
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+        working-directory: ${{ github.event.inputs.source_dir }}
 
       - name: Terraform Init
         id: terraform_init
@@ -127,7 +127,7 @@ jobs:
           echo "Directory contents:"
           ls -la
           terraform init -upgrade
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+        working-directory: ${{ github.event.inputs.source_dir }}
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
@@ -231,7 +231,7 @@ jobs:
           fi
           
           echo "Import operations completed"
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+        working-directory: ${{ github.event.inputs.source_dir }}
 
       # If action is apply and recreate is true, run "terraform state rm" on resources
       - name: Remove resources from state if recreating
@@ -245,12 +245,12 @@ jobs:
           sed -i '/existing_resources = true/d' terraform.tfvars
           # Add existing_resources = false to terraform.tfvars
           echo "existing_resources = false" >> terraform.tfvars
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+        working-directory: ${{ github.event.inputs.source_dir }}
 
       - name: Terraform Plan
         if: ${{ env.TF_ACTION == 'plan' }}
         run: terraform plan -input=false -var-file=terraform.tfvars
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+        working-directory: ${{ github.event.inputs.source_dir }}
 
       - name: Terraform Apply
         if: ${{ env.TF_ACTION == 'apply' }}
@@ -344,9 +344,9 @@ jobs:
               echo "Some resources may have failed but the core infrastructure should be available."
             fi
           fi
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+        working-directory: ${{ github.event.inputs.source_dir }}
 
       - name: Terraform Destroy
         if: ${{ env.TF_ACTION == 'destroy' }}
         run: terraform destroy -auto-approve -input=false -var-file=terraform.tfvars
-        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+        working-directory: ${{ github.event.inputs.source_dir }}
