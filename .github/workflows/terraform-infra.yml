@@ -100,6 +100,75 @@ jobs:
             exit $INIT_STATUS
           fi
         
+      - name: Detect and Import Existing Resources
+        id: import_resources
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: |
+          echo "Checking for existing resources in ${{ env.ENVIRONMENT }} environment..."
+          
+          # Get current timestamp for logging
+          echo "Current timestamp: $(date -u "+%Y-%m-%d %H:%M:%S")"
+          echo "Running as user: $(whoami)"
+          
+          # First, let's check for the RDS database instance
+          DB_INSTANCE_ID="mlflow-db-${{ env.ENVIRONMENT }}"
+          echo "Checking for RDS instance: $DB_INSTANCE_ID"
+          DB_EXISTS=$(aws rds describe-db-instances --query "DBInstances[?DBInstanceIdentifier=='$DB_INSTANCE_ID'].DBInstanceIdentifier" --output text || echo "")
+          
+          if [ ! -z "$DB_EXISTS" ] && [ "$DB_EXISTS" != "None" ]; then
+            echo "Found existing RDS instance: $DB_EXISTS"
+            
+            # Check if the resource is already in the Terraform state
+            if ! terraform state list aws_db_instance.mlflow_db 2>/dev/null; then
+              echo "Importing RDS instance into Terraform state..."
+              terraform import aws_db_instance.mlflow_db $DB_INSTANCE_ID
+            else
+              echo "RDS instance already exists in Terraform state."
+            fi
+          else
+            echo "No existing RDS instance found with ID: $DB_INSTANCE_ID"
+          fi
+          
+          # Check for ECS cluster
+          CLUSTER_NAME="mlflow-cluster-${{ env.ENVIRONMENT }}"
+          echo "Checking for ECS cluster: $CLUSTER_NAME"
+          CLUSTER_EXISTS=$(aws ecs describe-clusters --clusters $CLUSTER_NAME --query "clusters[?clusterName=='$CLUSTER_NAME'].clusterName" --output text || echo "")
+          
+          if [ ! -z "$CLUSTER_EXISTS" ] && [ "$CLUSTER_EXISTS" != "None" ]; then
+            echo "Found existing ECS cluster: $CLUSTER_EXISTS"
+            
+            # Check if the resource is already in the Terraform state
+            if ! terraform state list aws_ecs_cluster.mlflow_cluster 2>/dev/null; then
+              echo "Importing ECS cluster into Terraform state..."
+              terraform import aws_ecs_cluster.mlflow_cluster $CLUSTER_NAME
+            else
+              echo "ECS cluster already exists in Terraform state."
+            fi
+          else
+            echo "No existing ECS cluster found with name: $CLUSTER_NAME"
+          fi
+          
+          # Check for S3 bucket
+          BUCKET_NAME="mlflow-artifacts-${{ env.ENVIRONMENT }}"
+          echo "Checking for S3 bucket: $BUCKET_NAME"
+          BUCKET_EXISTS=$(aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null && echo "exists" || echo "")
+          
+          if [ "$BUCKET_EXISTS" == "exists" ]; then
+            echo "Found existing S3 bucket: $BUCKET_NAME"
+            
+            # Check if the resource is already in the Terraform state
+            if ! terraform state list aws_s3_bucket.mlflow_artifacts 2>/dev/null; then
+              echo "Importing S3 bucket into Terraform state..."
+              terraform import aws_s3_bucket.mlflow_artifacts $BUCKET_NAME
+            else
+              echo "S3 bucket already exists in Terraform state."
+            fi
+          else
+            echo "No existing S3 bucket found with name: $BUCKET_NAME"
+          fi
+          
+          echo "Resource detection and import completed."
+      
       - name: Terraform Plan
         id: terraform_plan
         if: ${{ env.TF_ACTION == 'plan' || github.event_name != 'workflow_dispatch' }}
@@ -143,13 +212,28 @@ jobs:
           
           # Run the apply with proper error handling
           echo "Applying terraform configuration..."
-          terraform apply -auto-approve -input=false -var-file=terraform.tfvars
-          APPLY_STATUS=$?
           
-          if [ $APPLY_STATUS -ne 0 ]; then
-            echo "Terraform apply failed. Check the logs for more details."
+          # Capture output to analyze for common errors
+          APPLY_OUTPUT=$(terraform apply -auto-approve -input=false -var-file=terraform.tfvars 2>&1) || APPLY_STATUS=$?
+          
+          # Check for already exists errors
+          if echo "$APPLY_OUTPUT" | grep -q "already exists"; then
+            echo "Some resources already exist but weren't properly imported. Check import step logs."
+            echo "$APPLY_OUTPUT"
+            
+            if [ "${{ github.event.inputs.recreate }}" == "true" ]; then
+              echo "Recreate flag is set. Attempting to continue despite errors..."
+              echo "$APPLY_OUTPUT"
+            else
+              echo "Use the 'recreate' option if you want to replace existing resources."
+              exit 1
+            fi
+          elif [ ! -z "$APPLY_STATUS" ]; then
+            echo "$APPLY_OUTPUT"
+            echo "Terraform apply failed with status: $APPLY_STATUS"
             exit $APPLY_STATUS
           else
+            echo "$APPLY_OUTPUT"
             echo "Terraform apply completed successfully!"
             
             # Output some useful information about the created resources
