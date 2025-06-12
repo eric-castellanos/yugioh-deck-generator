@@ -115,7 +115,7 @@ jobs:
             echo "Found existing RDS instance: $DB_INSTANCE_ID"
             if ! terraform state list module.rds.aws_db_instance.mlflow_db 2>/dev/null; then
               echo "Importing RDS instance..."
-              terraform import module.rds.aws_db_instance.mlflow_db "$DB_INSTANCE_ID"
+              terraform import module.rds.aws_db_instance.this[0] "$DB_INSTANCE_ID"
             fi
           fi
 
@@ -125,7 +125,7 @@ jobs:
           if aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
             echo "Found existing EKS cluster: $CLUSTER_NAME"
             if ! terraform state list module.eks.aws_eks_cluster.mlflow_cluster 2>/dev/null; then
-              terraform import module.eks.aws_eks_cluster.this "$CLUSTER_NAME"
+              terraform import module.eks.aws_eks_cluster.mlflow-cluster "$CLUSTER_NAME"
             fi
           fi
 

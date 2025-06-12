@@ -3,6 +3,7 @@
 locals {
   use_existing_vpc = var.vpc_id != null && var.vpc_id != ""
   final_vpc_id     = local.use_existing_vpc ? var.vpc_id : module.vpc.vpc_id
+  full_cluster_name = "${var.cluster_name}-${var.environment}"  # e.g. "mlflow-cluster-dev"
 }
 
 module "vpc" {
@@ -64,8 +65,4 @@ output "mlflow_bucket_name" {
 
 output "eks_cluster_name" {
   value = module.eks.cluster_name
-}
-
-locals {
-  full_cluster_name = "${var.cluster_name}-${var.environment}"  # e.g. "mlflow-cluster-dev"
 }
