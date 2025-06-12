@@ -2,7 +2,7 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 19.0"
 
-  cluster_name = "${var.cluster_name}-${var.environment}"
+  cluster_name = local.full_cluster_name
   vpc_id       = var.vpc_id
   subnet_ids   = var.subnet_ids
 
@@ -26,7 +26,7 @@ resource "aws_kms_key" "this" {
 resource "aws_kms_alias" "this" {
   count = var.create_resources ? 1 : 0
 
-  name          = "alias/eks/${var.cluster_name}"
+  name          = "alias/eks/${local.full_cluster_name}"
   target_key_id = aws_kms_key.this[0].id
 
   lifecycle {
@@ -37,7 +37,7 @@ resource "aws_kms_alias" "this" {
 resource "aws_cloudwatch_log_group" "this" {
   count = var.create_resources ? 1 : 0
 
-  name              = "/aws/eks/${var.cluster_name}/cluster"
+  name              = "/aws/eks/${local.full_cluster_name}/cluster"
   retention_in_days = var.log_retention_in_days
 
   tags = {
@@ -50,7 +50,7 @@ resource "aws_cloudwatch_log_group" "this" {
 }
 
 resource "aws_eks_node_group" "default_node_group" {
-  cluster_name    = "mlflow-cluster-${var.environment}"
+  cluster_name    = local.full_cluster_name
   node_group_name = "default_node_group"
   node_role_arn   = aws_iam_role.eks_node_group.arn
   subnet_ids      = var.subnet_ids

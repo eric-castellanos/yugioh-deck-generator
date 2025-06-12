@@ -35,3 +35,7 @@ variable "create_cloudwatch_log_group" {
   type        = bool
   default     = true
 }
+
+locals {
+  full_cluster_name = "${var.cluster_name}-${var.environment}"
+}

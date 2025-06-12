@@ -21,7 +21,7 @@ module "vpc" {
 module "s3" {
   source           = "./s3"
   region           = var.region
-  bucket_name      = "mlflow-backend-${var.environment}"
+  bucket_name      = "mlflow-backend"
   mlflow_user      = var.mlflow_user
   create_resources = !var.existing_resources
 }
