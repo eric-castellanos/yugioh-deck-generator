@@ -83,18 +83,31 @@ jobs:
         run: terraform init -upgrade
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
       - name: Import existing resources
         if: ${{ github.event.inputs.action == 'apply' && github.event.inputs.recreate == 'false' }}
         run: |
-          # Import VPC if it exists
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment }}" --query 'Vpcs[0].VpcId' --output text)
           if [ "$VPC_ID" != "None" ]; then
             terraform import module.vpc.module.vpc.aws_vpc.this[0] "$VPC_ID"
-            SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[*].SubnetId" --output text)
+            SUBNETS_JSON=$(aws ec2 describe-subnets \
+              --filters "Name=vpc-id,Values=$VPC_ID" \
+              --query "Subnets[*].{Id:SubnetId,Name:Tags[?Key=='Name']|[0].Value}" \
+              --output json)
             i=0
-            for subnet_id in $SUBNET_IDS; do
-              terraform import "module.vpc.module.vpc.aws_subnet.public[${i}]" "$subnet_id" || true
-              terraform import "module.vpc.module.vpc.aws_subnet.private[${i}]" "$subnet_id" || true
+            for row in $(echo "$SUBNETS_JSON" | jq -c '.[]'); do
+              SUBNET_ID=$(echo "$row" | jq -r '.Id')
+              NAME=$(echo "$row" | jq -r '.Name')
+              if [[ "$NAME" == *"public"* ]]; then
+                terraform import "module.vpc.module.vpc.aws_subnet.public[${i}]" "$SUBNET_ID"
+              elif [[ "$NAME" == *"private"* ]]; then
+                terraform import "module.vpc.module.vpc.aws_subnet.private[${i}]" "$SUBNET_ID"
+              else
+                echo "Skipping subnet $SUBNET_ID with unknown name '$NAME'"
+                continue
+              fi
               i=$((i+1))
             done
             IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query 'InternetGateways[0].InternetGatewayId' --output text)
@@ -103,12 +116,10 @@ jobs:
             fi
           fi
 
-          # Import S3 Bucket
           if aws s3api head-bucket --bucket mlflow-backend-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.s3.aws_s3_bucket.mlflow_bucket mlflow-backend-${{ github.event.inputs.environment }}
           fi
 
-          # Import IAM User & Policy
           if aws iam get-user --user-name mlflow-user-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.s3.aws_iam_user.mlflow_user mlflow-user-${{ github.event.inputs.environment }}
           fi
@@ -117,22 +128,18 @@ jobs:
             terraform import module.s3.aws_iam_policy.mlflow_s3_policy "$POLICY_ARN"
           fi
 
-          # Import CloudWatch Log Group
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q /aws/eks; then
             terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
           fi
 
-          # Import KMS Alias
           if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
             terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
           fi
 
-          # Import DB Subnet Group
           if aws rds describe-db-subnet-groups --db-subnet-group-name mlflow-db-subnet-group-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.rds.aws_db_subnet_group.mlflow mlflow-db-subnet-group-${{ github.event.inputs.environment }}
           fi
 
-          # Import RDS Security Group
           SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=mlflow-rds-sg-${{ github.event.inputs.environment }}" --query 'SecurityGroups[0].GroupId' --output text)
           if echo "$SG_ID" | grep -qv None; then
             terraform import module.rds.aws_security_group.mlflow_rds_sg "$SG_ID"
