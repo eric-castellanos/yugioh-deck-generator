@@ -109,99 +109,69 @@ jobs:
         id: import_resources
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
-          echo "Checking for existing resources in ${{ env.ENVIRONMENT }} environment..."
-          echo "Current timestamp: $(date -u "+%Y-%m-%d %H:%M:%S")"
-          echo "Running as user: $(whoami)"
+          echo "Detecting and importing existing resources in ${{ env.ENVIRONMENT }} environment..."
 
-          # RDS Database
-          DB_INSTANCE_ID="mlflow-db-${{ env.ENVIRONMENT }}"
-          echo "Checking for RDS instance: $DB_INSTANCE_ID"
-          if aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE_ID" >/dev/null 2>&1; then
-            echo "Found existing RDS instance: $DB_INSTANCE_ID"
-            if ! terraform state list module.rds.aws_db_instance.mlflow_db 2>/dev/null; then
-              echo "Importing RDS instance..."
-              terraform import module.rds.aws_db_instance.mlflow_db "$DB_INSTANCE_ID"
-            fi
-          fi
+          # Define resources to check and import
+          declare -A RESOURCES=(
+            ["module.rds.aws_db_instance.mlflow_db"]="mlflow-db-${{ env.ENVIRONMENT }}"
+            ["module.eks.module.eks.aws_eks_cluster.this[0]"]="mlflow-cluster-${{ env.ENVIRONMENT }}"
+            ["module.eks.aws_cloudwatch_log_group.this[0]"]="/aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster"
+            ["module.eks.aws_iam_role.eks_node_group"]="eks_node_group"
+            ["module.eks.aws_kms_key.this[0]"]="5dd32b2c-2af3-443b-b016-6aa30c16b6a6"
+            ["module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"]="alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
+            ["module.s3.aws_s3_bucket.mlflow_bucket[0]"]="mlflow-backend-${{ env.ENVIRONMENT }}"
+            ["module.s3.aws_iam_user.mlflow_user[0]"]="mlflow-user"
+            ["module.s3.aws_iam_policy.mlflow_s3_policy[0]"]="arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:policy/mlflow-s3-access"
+          )
 
-          # EKS Cluster
-          CLUSTER_NAME="mlflow-cluster-${{ env.ENVIRONMENT }}"
-          echo "Checking for EKS cluster: $CLUSTER_NAME"
-          if aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
-            echo "Found existing EKS cluster: $CLUSTER_NAME"
-            if ! terraform state list module.eks.module.eks.aws_eks_cluster.this[0] 2>/dev/null; then
-              terraform import module.eks.module.eks.aws_eks_cluster.this[0] "$CLUSTER_NAME"
-            fi
-          else
-            echo "EKS cluster not found: $CLUSTER_NAME"
-          fi
+          for STATE_PATH in "${!RESOURCES[@]}"; do
+            RESOURCE_ID="${RESOURCES[$STATE_PATH]}"
 
-          # EKS Log Group
-          LOG_GROUP_NAME="/aws/eks/${CLUSTER_NAME}/cluster"
-          if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP_NAME" | grep -q "$LOG_GROUP_NAME"; then
-            echo "Found EKS log group: $LOG_GROUP_NAME"
-            if ! terraform state list module.eks.aws_cloudwatch_log_group.this[0] 2>/dev/null; then
-              terraform import module.eks.aws_cloudwatch_log_group.this[0] "$LOG_GROUP_NAME"
-            fi
-          fi
+            echo "Checking resource: $STATE_PATH with ID: $RESOURCE_ID"
 
-          # EKS Node Group IAM Role
-          if aws iam get-role --role-name "eks_node_group" >/dev/null 2>&1; then
-            echo "Found EKS IAM role: eks_node_group"
-            if ! terraform state list module.eks.aws_iam_role.eks_node_group 2>/dev/null; then
-              terraform import module.eks.aws_iam_role.eks_node_group "eks_node_group"
-            fi
-          fi
-
-          # KMS Key
-          KMS_KEY_ID="5dd32b2c-2af3-443b-b016-6aa30c16b6a6"
-          echo "Checking for KMS Key: $KMS_KEY_ID"
-          if aws kms describe-key --key-id "$KMS_KEY_ID" >/dev/null 2>&1; then
-            if ! terraform state list module.eks.aws_kms_key.this[0] 2>/dev/null; then
-              terraform import module.eks.aws_kms_key.this[0] "$KMS_KEY_ID"
-            fi
-          fi
-
-          # KMS Alias
-          KMS_ALIAS="alias/eks/${CLUSTER_NAME}"
-          echo "Checking for KMS Alias: $KMS_ALIAS"
-
-          if aws kms list-aliases | grep -q "$KMS_ALIAS"; then
-            echo "KMS alias exists: $KMS_ALIAS"
-
-            if ! terraform state list | grep -q 'module.eks.module.eks.module.kms.aws_kms_alias.this\["cluster"\]'; then
-              echo "Importing KMS alias into Terraform state..."
-              terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' "$KMS_ALIAS"
+            # Determine AWS CLI command based on resource type
+            if [[ $STATE_PATH == *"aws_db_instance"* ]]; then
+              CHECK_CMD="aws rds describe-db-instances --db-instance-identifier $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_eks_cluster"* ]]; then
+              CHECK_CMD="aws eks describe-cluster --name $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_cloudwatch_log_group"* ]]; then
+              CHECK_CMD="aws logs describe-log-groups --log-group-name-prefix $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_iam_role"* ]]; then
+              CHECK_CMD="aws iam get-role --role-name $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_kms_key"* ]]; then
+              CHECK_CMD="aws kms describe-key --key-id $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_kms_alias"* ]]; then
+              CHECK_CMD="aws kms list-aliases | grep -q $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_s3_bucket"* ]]; then
+              CHECK_CMD="aws s3api head-bucket --bucket $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_iam_user"* ]]; then
+              CHECK_CMD="aws iam get-user --user-name $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_iam_policy"* ]]; then
+              CHECK_CMD="aws iam get-policy --policy-arn $RESOURCE_ID"
             else
-              echo "KMS alias already exists in Terraform state."
+              echo "Unknown resource type for $STATE_PATH. Skipping."
+              continue
             fi
-          else
-            echo "KMS alias not found: $KMS_ALIAS"
-          fi
 
-          # S3 Bucket
-          BUCKET_NAME="mlflow-backend-${{ env.ENVIRONMENT }}"
-          echo "Checking for S3 bucket: $BUCKET_NAME"
-          if aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
-            if ! terraform state list module.s3.aws_s3_bucket.mlflow_bucket[0] 2>/dev/null; then
-              terraform import module.s3.aws_s3_bucket.mlflow_bucket[0] "$BUCKET_NAME"
-            fi
-          fi
+            # Check if resource exists
+            if eval "$CHECK_CMD" >/dev/null 2>&1; then
+              echo "Resource exists: $RESOURCE_ID"
 
-          # IAM User
-          if aws iam get-user --user-name "mlflow-user" >/dev/null 2>&1; then
-            if ! terraform state list module.s3.aws_iam_user.mlflow_user[0] 2>/dev/null; then
-              terraform import module.s3.aws_iam_user.mlflow_user[0] "mlflow-user"
+              # Import resource into Terraform state if not already imported
+              if ! terraform state list "$STATE_PATH" 2>/dev/null; then
+                echo "Importing resource into Terraform state: $STATE_PATH"
+                terraform import "$STATE_PATH" "$RESOURCE_ID" || {
+                  echo "Failed to import resource: $RESOURCE_ID. Ensure it exists in the correct region.";
+                  exit 1;
+                }
+              else
+                echo "Resource already exists in Terraform state: $STATE_PATH"
+              fi
+            else
+              echo "Resource not found: $RESOURCE_ID"
+              echo "Proceeding to create the resource using Terraform."
             fi
-          fi
-
-          # IAM Policy
-          POLICY_ARN="arn:aws:iam::256995722813:policy/mlflow-s3-access"
-          if aws iam get-policy --policy-arn "$POLICY_ARN" >/dev/null 2>&1; then
-            if ! terraform state list module.s3.aws_iam_policy.mlflow_s3_policy[0] 2>/dev/null; then
-              terraform import module.s3.aws_iam_policy.mlflow_s3_policy[0] "$POLICY_ARN"
-            fi
-          fi
+          done
 
           echo "Resource detection and import completed."
       
