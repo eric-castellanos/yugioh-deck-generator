@@ -65,22 +65,10 @@ jobs:
         with:
           terraform_version: 1.6.0
 
-      - name: Check Existing VPCs
-        id: check_vpc
+      - name: Configure MLFlow Terraform
         run: |
-          VPC_ID=$(aws ec2 describe-vpcs \
-            --filters "Name=tag:Project,Values=mlflow" \
-                     "Name=tag:Environment,Values=${{ github.event.inputs.environment || 'dev' }}" \
-            --query 'Vpcs[0].VpcId' \
-            --output text)
-
-          if [ "$VPC_ID" != "None" ]; then
-            echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
-            echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
-          else
-            echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
-          fi
-        working-directory: ${{ github.workspace }}/infra/terraform/vpc
+          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
+          CLUSTER_NAME="mlflow-cluster-${ENVIRONMENT}"
 
       - name: Create terraform.tfvars file
         run: |
@@ -91,9 +79,36 @@ jobs:
           region = "${{ env.AWS_REGION }}"
           bucket_name = "mlflow-backend-${{ github.event.inputs.environment || 'dev' }}"
           mlflow_user = "mlflow-user-${{ github.event.inputs.environment || 'dev' }}"
-          vpc_id = "${{ steps.check_vpc.outputs.VPC_ID }}"
           EOF
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Check Existing VPCs
+        id: check_vpc
+        run: |
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment || 'dev' }}" --query 'Vpcs[0].VpcId' --output text)
+          if [ "$VPC_ID" != "None" ]; then
+            echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
+            echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
+          else
+            echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
+          fi
+        working-directory: ${{ github.workspace }}/infra/terraform/vpc
+
+      - name: Set VPC Variables
+        run: |
+          terraform init -input=false -backend=false
+          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
+            echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
+          else
+            VPC_ID_OUTPUT=$(terraform output -raw vpc_id 2>/dev/null || true)
+            if [ -n "$VPC_ID_OUTPUT" ]; then
+              echo "VPC_ID=$VPC_ID_OUTPUT" >> $GITHUB_ENV
+            else
+              echo "VPC_ID=" >> $GITHUB_ENV
+              echo "Warning: terraform output -raw vpc_id failed or returned empty" >&2
+            fi
+          fi
+        working-directory: ${{ github.workspace }}/infra/terraform/vpc
 
       - name: Import Existing Resources
         if: ${{ env.TF_ACTION == 'apply' }}
@@ -111,9 +126,13 @@ jobs:
           fi
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster 2>/dev/null; then
             terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
+            sleep 5
           fi
           if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
             terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
+          fi
+          if aws rds describe-db-subnet-groups --db-subnet-group-name mlflow-db-subnet-group-${{ github.event.inputs.environment }} 2>/dev/null; then
+            terraform import module.rds.aws_db_subnet_group.mlflow mlflow-db-subnet-group-${{ github.event.inputs.environment }}
           fi
           terraform state list || echo "No state yet"
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
@@ -121,6 +140,7 @@ jobs:
       - name: Terraform Apply
         run: |
           terraform init -upgrade
+
           MAX_RETRIES=3
           RETRY_DELAY=10
           SUCCESS=false
@@ -141,7 +161,6 @@ jobs:
                   -target="module.s3.aws_s3_bucket.mlflow_bucket" \
                   -target="module.s3.aws_iam_user.mlflow_user" \
                   -target="module.s3.aws_iam_policy.mlflow_s3_policy" \
-                  -target="module.eks.module.eks.aws_cloudwatch_log_group.this[0]" \
                   -target="module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"
                 sleep $RETRY_DELAY
               fi
