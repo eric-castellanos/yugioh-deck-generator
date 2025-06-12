@@ -1,6 +1,6 @@
 variable "db_name" {
   description = "Database name"
-  default     = "mlflowdb"
+  default     = "mlflow-db"
 }
 
 variable "db_username" {
