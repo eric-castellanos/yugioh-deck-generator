@@ -141,7 +141,7 @@ jobs:
             elif [[ $STATE_PATH == *"aws_kms_key"* ]]; then
               CHECK_CMD="aws kms describe-key --key-id $RESOURCE_ID"
             elif [[ $STATE_PATH == *"aws_kms_alias"* ]]; then
-              CHECK_CMD="aws kms list-aliases | grep -q $RESOURCE_ID"
+              CHECK_CMD="aws kms list-aliases --query 'Aliases[?AliasName==\`$RESOURCE_ID\`] | [0]' --output text"
             elif [[ $STATE_PATH == *"aws_s3_bucket"* ]]; then
               CHECK_CMD="aws s3api head-bucket --bucket $RESOURCE_ID"
             elif [[ $STATE_PATH == *"aws_iam_user"* ]]; then
