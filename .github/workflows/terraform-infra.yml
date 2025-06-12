@@ -160,7 +160,7 @@ jobs:
           echo "Checking for KMS Alias: $KMS_ALIAS"
           if aws kms list-aliases | grep -q "$KMS_ALIAS"; then
             if ! terraform state list module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] 2>/dev/null; then
-              terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' "$KMS_ALIAS"
+              terraform import 'module.eks.aws_kms_alias.this[0]' "$KMS_ALIAS"
             fi
           fi
 
