@@ -1,13 +1,3 @@
-variable "account_id" {
-  description = "AWS Account ID"
-  type        = string
-}
-
-variable "github_actions_role_arn" {
-  description = "ARN of the GitHub Actions OIDC role (e.g., setup-mlflow)"
-  type        = string
-}
-
 resource "aws_kms_key" "this" {
   description         = "KMS key for EKS cluster encryption"
   enable_key_rotation = true
