@@ -25,6 +25,7 @@
 .terraform.lock.hcl
 terraform.tfstate*
 *.tfstate*
+*.tfvars
 
 # Project
 /docs/*
