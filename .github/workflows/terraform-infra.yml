@@ -158,10 +158,18 @@ jobs:
           # KMS Alias
           KMS_ALIAS="alias/eks/${CLUSTER_NAME}"
           echo "Checking for KMS Alias: $KMS_ALIAS"
+
           if aws kms list-aliases | grep -q "$KMS_ALIAS"; then
-            if ! terraform state list module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] 2>/dev/null; then
-              terraform import 'terraform state list module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' "$KMS_ALIAS"
+            echo "KMS alias exists: $KMS_ALIAS"
+            
+            if ! terraform state list | grep -q 'module.eks.aws_kms_alias.this\[0\]'; then
+              echo "Importing KMS alias into Terraform state..."
+              terraform import module.eks.aws_kms_alias.this[0] "$KMS_ALIAS"
+            else
+              echo "KMS alias already exists in Terraform state."
             fi
+          else
+            echo "KMS alias not found: $KMS_ALIAS"
           fi
 
           # S3 Bucket
