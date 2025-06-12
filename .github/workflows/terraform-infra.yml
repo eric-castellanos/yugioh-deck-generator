@@ -132,6 +132,7 @@ jobs:
       
           MAX_RETRIES=3
           RETRY_DELAY=10
+          SUCCESS=false
       
           for ((i=1; i<=MAX_RETRIES; i++)); do
             echo "Attempt $i of $MAX_RETRIES"
@@ -139,10 +140,10 @@ jobs:
       
             if terraform apply -auto-approve tfplan; then
               echo "Terraform apply successful"
+              SUCCESS=true
               break
             else
               echo "Terraform apply failed, retrying in $RETRY_DELAY seconds..."
-              sleep $RETRY_DELAY
               if [[ $i -lt $MAX_RETRIES ]]; then
                 echo "Destroying problematic resources..."
                 terraform destroy -auto-approve \
@@ -151,9 +152,15 @@ jobs:
                   -target="module.s3.aws_iam_policy.mlflow_s3_policy" \
                   -target="module.eks.module.eks.aws_cloudwatch_log_group.this[0]" \
                   -target="module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"
+                sleep $RETRY_DELAY
               fi
             fi
           done
+      
+          if [[ "$SUCCESS" == "false" ]]; then
+            echo "All Terraform apply attempts failed. Exiting."
+            exit 1
+          fi
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Verify Created Resources
