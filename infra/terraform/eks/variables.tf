@@ -1,5 +1,5 @@
 variable "cluster_name" {
-  default = "mlflow-eks-cluster"
+  default = "mlflow-cluster"
 }
 
 variable "cluster_version" {
