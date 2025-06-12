@@ -126,7 +126,6 @@ jobs:
           fi
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster 2>/dev/null; then
             terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
-            sleep 5
           fi
           if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
             terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
@@ -156,17 +155,29 @@ jobs:
             else
               echo "Terraform apply failed, retrying in $RETRY_DELAY seconds..."
               if [[ $i -lt $MAX_RETRIES ]]; then
-                echo "Destroying problematic resources..."
+                echo "Cleaning up resources and state..."
+                terraform state rm module.rds.aws_db_subnet_group.mlflow || true
+                terraform state rm module.eks.module.eks.aws_cloudwatch_log_group.this[0] || true
+
                 terraform destroy -auto-approve \
                   -target="module.s3.aws_s3_bucket.mlflow_bucket" \
                   -target="module.s3.aws_iam_user.mlflow_user" \
                   -target="module.s3.aws_iam_policy.mlflow_s3_policy" \
-                  -target="module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"
-                echo "Checking for existing CloudWatch log group to import..."
-                if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster 2>/dev/null; then
-                  terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
-                  echo "Successfully imported pre-existing CloudWatch log group"
+                  -target="module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]" \
+                  -target="module.rds.aws_db_subnet_group.mlflow" || true
+
+                echo "Removing log group via AWS CLI..."
+                aws logs delete-log-group --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster || true
+
+                echo "Removing RDS subnet group via AWS CLI..."
+                aws rds delete-db-subnet-group --db-subnet-group-name mlflow-db-subnet-group-${{ github.event.inputs.environment }} || true
+
+                echo "Cleaning up any orphaned Internet Gateways..."
+                IGW_ID=$(aws ec2 describe-internet-gateways --query 'InternetGateways[?Attachments[?VpcId!=`null`]].InternetGatewayId' --output text | head -n1)
+                if [[ -n "$IGW_ID" ]]; then
+                  aws ec2 delete-internet-gateway --internet-gateway-id $IGW_ID || true
                 fi
+
                 sleep $RETRY_DELAY
               fi
             fi
