@@ -36,6 +36,16 @@ variable "create_cloudwatch_log_group" {
   default     = true
 }
 
+variable "account_id" {
+  description = "AWS Account ID"
+  type        = string
+}
+
+variable "github_actions_role_arn" {
+  description = "ARN of the GitHub Actions role"
+  type        = string
+}
+
 locals {
   full_cluster_name = "${var.cluster_name}-${var.environment}"
 }
