@@ -30,12 +30,12 @@ on:
         required: true
         default: 'infra/terraform'
         type: string
-  pull_request:
-    branches:
-      - infra/setup_ml_flow
   push:
     branches:
-      - infra/setup_ml_flow
+      - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
   id-token: write
@@ -46,10 +46,12 @@ env:
 
 jobs:
   terraform:
+    name: Terraform
     runs-on: ubuntu-latest
     env:
       TF_ACTION: ${{ github.event.inputs.action || 'plan' }}
       TF_SOURCE_DIR: ${{ github.event.inputs.source_dir || 'infra/terraform' }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -60,170 +62,94 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Install Terraform
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.0
 
-      - name: Configure MLFlow Terraform
-        run: |
-          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
-          CLUSTER_NAME="mlflow-cluster-${ENVIRONMENT}"
-
-      - name: Create terraform.tfvars file
+      - name: Create terraform.tfvars
         run: |
           cat > terraform.tfvars <<EOF
-          environment = "${{ github.event.inputs.environment || 'dev' }}"
-          cluster_name = "mlflow-cluster-${{ github.event.inputs.environment || 'dev' }}"
+          environment = "${{ github.event.inputs.environment }}"
+          cluster_name = "mlflow-cluster-${{ github.event.inputs.environment }}"
           db_password = "${{ secrets.DB_PASSWORD }}"
           region = "${{ env.AWS_REGION }}"
-          bucket_name = "mlflow-backend-${{ github.event.inputs.environment || 'dev' }}"
-          mlflow_user = "mlflow-user-${{ github.event.inputs.environment || 'dev' }}"
+          bucket_name = "mlflow-backend-${{ github.event.inputs.environment }}"
+          mlflow_user = "mlflow-user-${{ github.event.inputs.environment }}"
           EOF
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
-      - name: Check Existing VPCs
-        id: check_vpc
+      - name: Terraform Init
+        run: terraform init -upgrade
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
+      - name: Import existing resources
+        if: ${{ github.event.inputs.action == 'apply' && github.event.inputs.recreate == 'false' }}
         run: |
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment || 'dev' }}" --query 'Vpcs[0].VpcId' --output text)
+          # Import VPC if it exists
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment }}" --query 'Vpcs[0].VpcId' --output text)
           if [ "$VPC_ID" != "None" ]; then
-            echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
-            echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
-          else
-            echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
-          fi
-        working-directory: ${{ github.workspace }}/infra/terraform/vpc
-
-      - name: Set VPC Variables
-        run: |
-          terraform init -input=false -backend=false
-          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
-            echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
-          else
-            VPC_ID_OUTPUT=$(terraform output -raw vpc_id 2>/dev/null || true)
-            if [ -n "$VPC_ID_OUTPUT" ]; then
-              echo "VPC_ID=$VPC_ID_OUTPUT" >> $GITHUB_ENV
-            else
-              echo "VPC_ID=" >> $GITHUB_ENV
-              echo "Warning: terraform output -raw vpc_id failed or returned empty" >&2
-            fi
-          fi
-        working-directory: ${{ github.workspace }}/infra/terraform/vpc
-
-      - name: Import Existing Resources
-        if: ${{ env.TF_ACTION == 'apply' }}
-        run: |
-          terraform init -upgrade
-
-          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
-            terraform import module.vpc.module.vpc.aws_vpc.this[0] ${{ steps.check_vpc.outputs.VPC_ID }}
-            SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=${{ steps.check_vpc.outputs.VPC_ID }}" --query "Subnets[*].SubnetId" --output text)
+            terraform import module.vpc.module.vpc.aws_vpc.this[0] "$VPC_ID"
+            SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[*].SubnetId" --output text)
             i=0
             for subnet_id in $SUBNET_IDS; do
-              terraform import "module.vpc.module.vpc.aws_subnet.public[${i}]" $subnet_id || true
-              terraform import "module.vpc.module.vpc.aws_subnet.private[${i}]" $subnet_id || true
+              terraform import "module.vpc.module.vpc.aws_subnet.public[${i}]" "$subnet_id" || true
+              terraform import "module.vpc.module.vpc.aws_subnet.private[${i}]" "$subnet_id" || true
               i=$((i+1))
             done
-            EXISTING_IGW=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=${{ steps.check_vpc.outputs.VPC_ID }}" --query 'InternetGateways[0].InternetGatewayId' --output text)
-            if [ "$EXISTING_IGW" != "None" ]; then
-              terraform import module.vpc.module.vpc.aws_internet_gateway.this[0] $EXISTING_IGW
+            IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query 'InternetGateways[0].InternetGatewayId' --output text)
+            if [ "$IGW_ID" != "None" ]; then
+              terraform import module.vpc.module.vpc.aws_internet_gateway.this[0] "$IGW_ID"
             fi
           fi
 
+          # Import S3 Bucket
           if aws s3api head-bucket --bucket mlflow-backend-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.s3.aws_s3_bucket.mlflow_bucket mlflow-backend-${{ github.event.inputs.environment }}
           fi
 
+          # Import IAM User & Policy
           if aws iam get-user --user-name mlflow-user-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.s3.aws_iam_user.mlflow_user mlflow-user-${{ github.event.inputs.environment }}
           fi
-
           POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text)
           if [ -n "$POLICY_ARN" ]; then
-            terraform import module.s3.aws_iam_policy.mlflow_s3_policy $POLICY_ARN
+            terraform import module.s3.aws_iam_policy.mlflow_s3_policy "$POLICY_ARN"
           fi
 
+          # Import CloudWatch Log Group
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q /aws/eks; then
             terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
           fi
 
+          # Import KMS Alias
           if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
             terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
           fi
 
+          # Import DB Subnet Group
           if aws rds describe-db-subnet-groups --db-subnet-group-name mlflow-db-subnet-group-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.rds.aws_db_subnet_group.mlflow mlflow-db-subnet-group-${{ github.event.inputs.environment }}
           fi
 
-          SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=mlflow-rds-sg-${{ github.event.inputs.environment }}" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+          # Import RDS Security Group
+          SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=mlflow-rds-sg-${{ github.event.inputs.environment }}" --query 'SecurityGroups[0].GroupId' --output text)
           if echo "$SG_ID" | grep -qv None; then
-            terraform import module.rds.aws_security_group.mlflow_rds_sg $SG_ID
+            terraform import module.rds.aws_security_group.mlflow_rds_sg "$SG_ID"
           fi
-
-          terraform state list || echo "No state yet"
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-      
+
+      - name: Terraform Plan
+        if: ${{ env.TF_ACTION == 'plan' }}
+        run: terraform plan -input=false -var-file=terraform.tfvars
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
       - name: Terraform Apply
-        run: |
-          terraform init -upgrade
-
-          MAX_RETRIES=3
-          RETRY_DELAY=10
-          SUCCESS=false
-
-          for ((i=1; i<=MAX_RETRIES; i++)); do
-            echo "Attempt $i of $MAX_RETRIES"
-            terraform plan -out=tfplan
-
-            if terraform apply -auto-approve tfplan; then
-              echo "Terraform apply successful"
-              SUCCESS=true
-              break
-            else
-              echo "Terraform apply failed, retrying in $RETRY_DELAY seconds..."
-              if [[ $i -lt $MAX_RETRIES ]]; then
-                echo "Cleaning up resources and state..."
-                terraform state rm module.rds.aws_db_subnet_group.mlflow || true
-                terraform state rm module.eks.module.eks.aws_cloudwatch_log_group.this[0] || true
-
-                terraform destroy -auto-approve \
-                  -target="module.s3.aws_s3_bucket.mlflow_bucket" \
-                  -target="module.s3.aws_iam_user.mlflow_user" \
-                  -target="module.s3.aws_iam_policy.mlflow_s3_policy" \
-                  -target="module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]" \
-                  -target="module.rds.aws_db_subnet_group.mlflow" || true
-
-                echo "Removing log group via AWS CLI..."
-                aws logs delete-log-group --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster || true
-
-                echo "Removing RDS subnet group via AWS CLI..."
-                aws rds delete-db-subnet-group --db-subnet-group-name mlflow-db-subnet-group-${{ github.event.inputs.environment }} || true
-
-                echo "Cleaning up any orphaned Internet Gateways..."
-                IGW_ID=$(aws ec2 describe-internet-gateways --query 'InternetGateways[?Attachments[?VpcId!=`null`]].InternetGatewayId' --output text | head -n1)
-                if [[ -n "$IGW_ID" ]]; then
-                  aws ec2 delete-internet-gateway --internet-gateway-id $IGW_ID || true
-                fi
-
-                sleep $RETRY_DELAY
-              fi
-            fi
-          done
-
-          if [[ "$SUCCESS" == "false" ]]; then
-            echo "All Terraform apply attempts failed. Exiting."
-            exit 1
-          fi
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: terraform apply -auto-approve -input=false -var-file=terraform.tfvars
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
-      - name: Verify Created Resources
-        if: ${{ env.TF_ACTION == 'apply' }}
-        run: |
-          echo "Verifying resource creation..."
-          terraform state list
-          echo "Checking key resources..."
-          terraform state show module.s3.aws_s3_bucket.mlflow_bucket || echo "S3 bucket not found in state"
-          terraform state show module.s3.aws_iam_user.mlflow_user || echo "IAM user not found in state"
-          terraform state show module.eks.module.eks.aws_cloudwatch_log_group.this[0] || echo "Log group not found in state"
-          terraform state show module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"] || echo "KMS alias not found in state"
+      - name: Terraform Destroy
+        if: ${{ env.TF_ACTION == 'destroy' }}
+        run: terraform destroy -auto-approve -input=false -var-file=terraform.tfvars
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
