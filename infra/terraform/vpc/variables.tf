@@ -21,3 +21,15 @@ variable "private_subnet_cidrs" {
 variable "environment" {
   default = "dev"
 }
+
+variable "vpc_id" {
+  type        = string
+  description = "Optional existing VPC to use"
+  default     = null
+}
+
+variable "create_vpc" {
+  description = "Controls if VPC should be created (it affects almost all resources)"
+  type        = bool
+  default     = true
+}

@@ -27,7 +27,8 @@
             "Action": [
                 "iam:TagPolicy",
                 "iam:GetPolicy",
-                "iam:GetPolicyVersion"
+                "iam:GetPolicyVersion",
+                "iam:ListPolicies"
             ],
             "Resource": "*"
         },

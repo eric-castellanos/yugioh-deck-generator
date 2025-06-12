@@ -37,7 +37,7 @@ resource "aws_lb" "mlflow" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [data.aws_security_group.mlflow.id]
-  subnets           = data.aws_subnet_ids.private.ids
+  subnets            = data.aws_subnet_ids.private.ids
 }
 
 resource "aws_lb_target_group" "mlflow" {
@@ -53,7 +53,7 @@ resource "aws_lb" "mlflow" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.mlflow.id]
-  subnets           = data.aws_subnet_ids.default.ids
+  subnets            = data.aws_subnet_ids.default.ids
 }
 
 resource "aws_lb_target_group" "mlflow" {
@@ -84,14 +84,14 @@ resource "aws_security_group" "mlflow" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]  # Consider restricting this in production
+    cidr_blocks = ["0.0.0.0/0"] # Consider restricting this in production
   }
 
   ingress {
     from_port   = 5000
     to_port     = 5000
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]  # MLflow default tracking port
+    cidr_blocks = ["0.0.0.0/0"] # MLflow default tracking port
   }
 
   egress {
@@ -146,8 +146,8 @@ resource "aws_efs_file_system" "mlflow" {
 resource "aws_efs_mount_target" "mlflow" {
   count = length(data.aws_subnet_ids.default.ids)
 
-  file_system_id = aws_efs_file_system.mlflow.id
-  subnet_id      = data.aws_subnet_ids.default.ids[count.index]
+  file_system_id  = aws_efs_file_system.mlflow.id
+  subnet_id       = data.aws_subnet_ids.default.ids[count.index]
   security_groups = [aws_security_group.mlflow.id]
 }
 

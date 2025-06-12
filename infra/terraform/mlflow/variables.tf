@@ -40,7 +40,7 @@ variable "enable_efs" {
 variable "private_subnet_tags" {
   description = "Tags to identify private subnets"
   type        = map(string)
-  default     = {
+  default = {
     Name = "private-subnet-*"
   }
 }

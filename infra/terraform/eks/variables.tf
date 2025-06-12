@@ -8,6 +8,12 @@ variable "cluster_version" {
   default     = "1.29"
 }
 
+variable "create_resources" {
+  type        = bool
+  description = "Set to true to create resources, false to skip creation"
+  default     = true
+}
+
 variable "node_instance_type" {
   description = "EC2 instance type for EKS worker nodes"
   type        = string
@@ -22,4 +28,10 @@ variable "subnet_ids" {
 
 variable "environment" {
   default = "dev"
+}
+
+variable "create_cloudwatch_log_group" {
+  description = "Determines whether to create CloudWatch Log Group for EKS cluster"
+  type        = bool
+  default     = true
 }

@@ -1,35 +1,49 @@
 resource "aws_s3_bucket" "mlflow_bucket" {
-    bucket = var.bucket_name
+  count = var.create_resources ? 1 : 0
 
-    tags = {
-        Name = "mlflow_artifacts"
-        environment = var.environment
-    }
+  bucket = var.bucket_name
+
+  tags = {
+    Name        = "mlflow_artifacts"
+    environment = var.environment
+  }
 }
 
 resource "aws_iam_user" "mlflow_user" {
-    name = var.mlflow_user
+  count = var.create_resources ? 1 : 0
+
+  name = var.mlflow_user
+  path = "/"
+
+  tags = {
+    Name        = "mlflow_user"
+    environment = var.environment
+  }
+}
+
+data "aws_iam_policy_document" "mlflow_s3_policy" {
+  version = "2012-10-17"
+  statement {
+    actions = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
+    effect  = "Allow"
+    resources = [
+      "arn:aws:s3:::${var.bucket_name}",
+      "arn:aws:s3:::${var.bucket_name}/*"
+    ]
+  }
 }
 
 resource "aws_iam_policy" "mlflow_s3_policy" {
-    name        = "mlflow-s3-access"
-    description = "Allow MLflow to access its artifact S3 bucket"
-    policy      = jsonencode({
-        Version = "2012-10-17",
-        Statement = [
-            {
-                Action = [ "s3:PutObject", "s3:GetObject", "s3:ListBucket" ],
-                Effect = "Allow",
-                Resource = [
-                    "arn:aws:s3:::${var.bucket_name}",
-                    "arn:aws:s3:::${var.bucket_name}/*"
-                ]
-            }
-        ]
-    })
+  count = var.create_resources ? 1 : 0
+
+  name        = "mlflow-s3-access"
+  description = "Allow MLflow to access its artifact S3 bucket"
+  policy      = data.aws_iam_policy_document.mlflow_s3_policy.json
 }
 
-resource "aws_iam_user_policy_attachment" "attach_mlflow_policy" {
-    user = aws_iam_user.mlflow_user.name
-    policy_arn = aws_iam_policy.mlflow_s3_policy.arn
+resource "aws_iam_user_policy_attachment" "mlflow_s3_policy_attachment" {
+  count = var.create_resources ? 1 : 0
+
+  user       = aws_iam_user.mlflow_user[0].name
+  policy_arn = aws_iam_policy.mlflow_s3_policy[0].arn
 }

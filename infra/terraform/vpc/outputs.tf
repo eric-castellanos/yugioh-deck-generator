@@ -1,11 +1,12 @@
 output "vpc_id" {
-  value = module.vpc.vpc_id
+  description = "ID of the VPC in use"
+  value       = local.final_vpc_id
 }
 
 output "public_subnet_ids" {
-  value = module.vpc.public_subnets
+  value = module.vpc[0].public_subnets
 }
 
 output "private_subnet_ids" {
-  value = module.vpc.private_subnets
+  value = module.vpc[0].private_subnets
 }
