@@ -6,3 +6,5 @@ bucket_name        = "mlflow-backend-dev"
 mlflow_user        = "mlflow-user-dev"
 vpc_id             = null
 existing_resources = true
+account_id               = "256995722813"
+github_actions_role_arn = "arn:aws:iam::256995722813:role/setup-mlflow"
