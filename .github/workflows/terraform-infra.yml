@@ -87,7 +87,7 @@ jobs:
 
       # Only run imports when action is "apply" and recreate is false
       - name: Import existing resources
-        if: ${{ github.event.inputs.action == 'apply' && github.event.inputs.recreate == false }}
+        if: ${{ github.event.inputs.action == 'apply' }}
         run: |
           set +e  # Don't exit on error
           echo "Starting resource import for environment: ${{ env.ENVIRONMENT }}"
