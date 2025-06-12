@@ -2,7 +2,7 @@ module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 19.0"
 
-  cluster_name = "mlflow-cluster-${var.environment}"
+  cluster_name = "${var.cluster_name}-${var.environment}"
   vpc_id       = var.vpc_id
   subnet_ids   = var.subnet_ids
 

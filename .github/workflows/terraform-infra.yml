@@ -128,28 +128,28 @@ jobs:
           else
             echo "No existing RDS instance found with ID: $DB_INSTANCE_ID"
           fi
-          
-          # Check for ECS cluster
-          CLUSTER_NAME="mlflow-cluster-${{ env.ENVIRONMENT }}"
-          echo "Checking for ECS cluster: $CLUSTER_NAME"
-          CLUSTER_EXISTS=$(aws ecs describe-clusters --clusters $CLUSTER_NAME --query "clusters[?clusterName=='$CLUSTER_NAME'].clusterName" --output text || echo "")
-          
+
+          # Check for EKS cluster
+          CLUSTER_NAME="mlflow-eks-cluster-${{ env.ENVIRONMENT }}"
+          echo "Checking for EKS cluster: $CLUSTER_NAME"
+          CLUSTER_EXISTS=$(aws eks describe-cluster --name $CLUSTER_NAME --query "cluster.name" --output text 2>/dev/null || echo "")
+
           if [ ! -z "$CLUSTER_EXISTS" ] && [ "$CLUSTER_EXISTS" != "None" ]; then
-            echo "Found existing ECS cluster: $CLUSTER_EXISTS"
+            echo "Found existing EKS cluster: $CLUSTER_EXISTS"
             
             # Check if the resource is already in the Terraform state
-            if ! terraform state list aws_ecs_cluster.mlflow_cluster 2>/dev/null; then
-              echo "Importing ECS cluster into Terraform state..."
-              terraform import aws_ecs_cluster.mlflow_cluster $CLUSTER_NAME
+            if ! terraform state list aws_eks_cluster.mlflow_cluster 2>/dev/null; then
+              echo "Importing EKS cluster into Terraform state..."
+              terraform import aws_eks_cluster.mlflow_cluster $CLUSTER_NAME
             else
-              echo "ECS cluster already exists in Terraform state."
+              echo "EKS cluster already exists in Terraform state."
             fi
           else
-            echo "No existing ECS cluster found with name: $CLUSTER_NAME"
+            echo "No existing EKS cluster found with name: $CLUSTER_NAME"
           fi
           
           # Check for S3 bucket
-          BUCKET_NAME="mlflow-artifacts-${{ env.ENVIRONMENT }}"
+          BUCKET_NAME="mlflow-backend-${{ env.ENVIRONMENT }}"
           echo "Checking for S3 bucket: $BUCKET_NAME"
           BUCKET_EXISTS=$(aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null && echo "exists" || echo "")
           

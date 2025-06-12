@@ -1,7 +1,7 @@
 resource "aws_s3_bucket" "mlflow_bucket" {
   count = var.create_resources ? 1 : 0
 
-  bucket = var.bucket_name
+  bucket = "${var.bucket_name}-${var.environment}"
 
   tags = {
     Name        = "mlflow_artifacts"
