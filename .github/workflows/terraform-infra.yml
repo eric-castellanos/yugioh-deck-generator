@@ -76,12 +76,17 @@ jobs:
 
       - name: Create terraform.tfvars
         run: |
+          # Get current AWS account ID
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+          
           # Create the file with a temporary placeholder for password
           cat > terraform.tfvars <<EOF
           environment = "${{ env.ENVIRONMENT }}"
           cluster_name = "mlflow-cluster-${{ env.ENVIRONMENT }}"
           db_password = "temporarily_replaced_password"
           region = "${{ env.AWS_REGION }}"
+          account_id = "$AWS_ACCOUNT_ID"
+          github_actions_role_arn = "${{ secrets.AWS_ROLE_TO_ASSUME }}"
           EOF
           
           # Replace the placeholder with actual password using sed to avoid GitHub Actions workflow syntax issues

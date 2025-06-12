@@ -45,6 +45,9 @@ module "eks" {
   subnet_ids                  = module.vpc.private_subnet_ids
   create_resources            = !var.existing_resources
   create_cloudwatch_log_group = false # Disable creation of CloudWatch Log Group
+  account_id                  = var.account_id
+  github_actions_role_arn     = var.github_actions_role_arn
+  environment                 = var.environment
 }
 
 output "mlflow_db_endpoint" {

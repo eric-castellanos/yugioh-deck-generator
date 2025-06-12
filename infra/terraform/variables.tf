@@ -55,3 +55,14 @@ variable "bucket_name" {
   type        = string
   default     = null
 }
+
+variable "account_id" {
+  description = "AWS Account ID"
+  type        = string
+}
+
+variable "github_actions_role_arn" {
+  description = "ARN of the GitHub Actions role"
+  type        = string
+  default     = ""
+}
