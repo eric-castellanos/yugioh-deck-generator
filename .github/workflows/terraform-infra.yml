@@ -69,19 +69,6 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.0
-          terraform_wrapper: false  # Disable the wrapper script to use terraform directly
-      
-      - name: Verify Terraform Installation
-        run: |
-          echo "Terraform version check"
-          terraform -v
-          
-          echo "Environment verification"
-          env | grep TF || echo "No TF environment variables set"
-          
-          echo "Which terraform resolves to:"
-          which terraform
-          ls -la $(which terraform)
 
       - name: Check for existing resources
         id: check_resources
@@ -134,20 +121,7 @@ jobs:
       - name: Terraform Init
         id: terraform_init
         run: |
-          # Make sure terraform is correctly set up
-          which terraform
-          terraform -v
-          
-          # First try normal init
-          echo "Running terraform init..."
-          terraform init || {
-            echo "Standard init failed, trying with more options..."
-            # Try with explicit options and add -reconfigure if needed
-            terraform init -input=false -backend=true -get=true || {
-              echo "Still failing, trying with reconfigure..."
-              terraform init -input=false -reconfigure
-            }
-          }
+          terraform init -upgrade
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Install jq
