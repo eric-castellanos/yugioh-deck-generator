@@ -105,23 +105,19 @@ jobs:
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
           echo "Checking for existing resources in ${{ env.ENVIRONMENT }} environment..."
-          
-          # Get current timestamp for logging
+
           echo "Current timestamp: $(date -u "+%Y-%m-%d %H:%M:%S")"
           echo "Running as user: $(whoami)"
-          
-          # First, let's check for the RDS database instance
+
+          # RDS Database Check
           DB_INSTANCE_ID="mlflow-db-${{ env.ENVIRONMENT }}"
           echo "Checking for RDS instance: $DB_INSTANCE_ID"
-          DB_EXISTS=$((aws rds describe-db-instances --query "DBInstances[?DBInstanceIdentifier=='$DB_INSTANCE_ID'].DBInstanceIdentifier" --output text || echo "") | grep -o "exists")
           
-          if [ ! -z "$DB_EXISTS" ] && [ "$DB_EXISTS" != "None" ]; then
-            echo "Found existing RDS instance: $DB_EXISTS"
-            
-            # Check if the resource is already in the Terraform state
+          if aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE_ID" >/dev/null 2>&1; then
+            echo "Found existing RDS instance: $DB_INSTANCE_ID"
             if ! terraform state list aws_db_instance.mlflow_db 2>/dev/null; then
               echo "Importing RDS instance into Terraform state..."
-              terraform import aws_db_instance.mlflow_db $DB_INSTANCE_ID
+              terraform import aws_db_instance.mlflow_db "$DB_INSTANCE_ID"
             else
               echo "RDS instance already exists in Terraform state."
             fi
@@ -129,45 +125,38 @@ jobs:
             echo "No existing RDS instance found with ID: $DB_INSTANCE_ID"
           fi
 
-          # Check for EKS cluster
+          # EKS Cluster Check
           CLUSTER_NAME="mlflow-eks-cluster-${{ env.ENVIRONMENT }}"
           echo "Checking for EKS cluster: $CLUSTER_NAME"
-          CLUSTER_EXISTS=$((aws eks describe-cluster --name $CLUSTER_NAME --query "cluster.name" --output text 2>/dev/null || echo "") | grep -o "exists")
 
-          if [ ! -z "$CLUSTER_EXISTS" ] && [ "$CLUSTER_EXISTS" != "None" ]; then
-            echo "Found existing EKS cluster: $CLUSTER_EXISTS"
-            
-            # Check if the resource is already in the Terraform state
+          if aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
+            echo "Found existing EKS cluster: $CLUSTER_NAME"
             if ! terraform state list aws_eks_cluster.mlflow_cluster 2>/dev/null; then
               echo "Importing EKS cluster into Terraform state..."
-              terraform import aws_eks_cluster.mlflow_cluster $CLUSTER_NAME
+              terraform import aws_eks_cluster.mlflow_cluster "$CLUSTER_NAME"
             else
               echo "EKS cluster already exists in Terraform state."
             fi
           else
             echo "No existing EKS cluster found with name: $CLUSTER_NAME"
           fi
-          
-          # Check for S3 bucket
+
+          # S3 Bucket Check
           BUCKET_NAME="mlflow-backend-${{ env.ENVIRONMENT }}"
           echo "Checking for S3 bucket: $BUCKET_NAME"
-          BUCKET_EXISTS=$((aws s3api head-bucket --bucket $BUCKET_NAME 2>/dev/null && echo "exists" || echo "") | grep -o "exists")
 
-          
-          if [ "$BUCKET_EXISTS" == "exists" ]; then
+          if aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
             echo "Found existing S3 bucket: $BUCKET_NAME"
-            
-            # Check if the resource is already in the Terraform state
             if ! terraform state list aws_s3_bucket.mlflow_artifacts 2>/dev/null; then
               echo "Importing S3 bucket into Terraform state..."
-              terraform import aws_s3_bucket.mlflow_artifacts $BUCKET_NAME
+              terraform import aws_s3_bucket.mlflow_artifacts "$BUCKET_NAME"
             else
               echo "S3 bucket already exists in Terraform state."
             fi
           else
             echo "No existing S3 bucket found with name: $BUCKET_NAME"
           fi
-          
+
           echo "Resource detection and import completed."
       
       - name: Terraform Plan
