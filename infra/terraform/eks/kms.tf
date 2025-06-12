@@ -4,21 +4,20 @@ resource "aws_kms_key" "this" {
 
   policy = jsonencode({
     Version = "2012-10-17",
+    Id = "key-default-1",
     Statement = [
-      # Allow full admin control to the root user
       {
-        Sid       = "AllowRootAccount",
-        Effect    = "Allow",
+        Sid    = "EnableRootPermissions",
+        Effect = "Allow",
         Principal = {
           AWS = "arn:aws:iam::${var.account_id}:root"
         },
-        Action    = "kms:*",
-        Resource  = "*"
+        Action   = "kms:*",
+        Resource = "*"
       },
-      # Allow GitHub Actions role to perform needed actions
       {
-        Sid       = "AllowGitHubActionsAccess",
-        Effect    = "Allow",
+        Sid    = "AllowGitHubActionsAccess",
+        Effect = "Allow",
         Principal = {
           AWS = var.github_actions_role_arn
         },
