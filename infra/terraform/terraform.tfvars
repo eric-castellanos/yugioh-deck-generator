@@ -1,5 +1,5 @@
 environment        = "dev"
-cluster_name       = "mlflow-cluster-dev"
+cluster_name       = "mlflow-cluster"
 region             = "us-east-1"
 db_password        = "your-secure-password-here"
 bucket_name        = "mlflow-backend-dev"
