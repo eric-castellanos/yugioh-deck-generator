@@ -124,9 +124,11 @@ jobs:
           echo "Checking for EKS cluster: $CLUSTER_NAME"
           if aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
             echo "Found existing EKS cluster: $CLUSTER_NAME"
-            if ! terraform state list module.eks.aws_eks_cluster.mlflow_cluster 2>/dev/null; then
-              terraform import module.eks.aws_eks_cluster.this[0] "$CLUSTER_NAME"
+            if ! terraform state list module.eks.module.eks.aws_eks_cluster.this[0] 2>/dev/null; then
+              terraform import module.eks.module.eks.aws_eks_cluster.this[0] "$CLUSTER_NAME"
             fi
+          else
+            echo "EKS cluster not found: $CLUSTER_NAME"
           fi
 
           # EKS Log Group
