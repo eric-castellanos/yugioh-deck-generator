@@ -162,6 +162,11 @@ jobs:
                   -target="module.s3.aws_iam_user.mlflow_user" \
                   -target="module.s3.aws_iam_policy.mlflow_s3_policy" \
                   -target="module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"
+                echo "Checking for existing CloudWatch log group to import..."
+                if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster 2>/dev/null; then
+                  terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
+                  echo "Successfully imported pre-existing CloudWatch log group"
+                fi
                 sleep $RETRY_DELAY
               fi
             fi
