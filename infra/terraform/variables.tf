@@ -66,3 +66,9 @@ variable "github_actions_role_arn" {
   type        = string
   default     = ""
 }
+
+variable "existing_vpc_id" {
+  type        = string
+  description = "Optional existing VPC ID to use if VPC limit is reached"
+  default     = null
+}

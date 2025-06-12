@@ -12,7 +12,10 @@ resource "aws_kms_key" "this" {
         Principal = {
           AWS = "arn:aws:iam::${var.account_id}:root"
         },
-        Action   = "kms:*",
+        Action   = [
+          "kms:*",
+          "kms:PutKeyPolicy"
+        ],
         Resource = "*"
       },
       {
@@ -37,6 +40,6 @@ resource "aws_kms_key" "this" {
 }
 
 resource "aws_kms_alias" "this" {
-  name          = "alias/eks/${local.full_cluster_name}"
+  name          = "alias/eks/${var.cluster_name}-${var.environment}"
   target_key_id = aws_kms_key.this.key_id
 }

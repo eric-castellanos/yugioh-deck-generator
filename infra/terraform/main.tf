@@ -2,7 +2,7 @@
 
 locals {
   use_existing_vpc = var.vpc_id != null && var.vpc_id != ""
-  final_vpc_id     = local.use_existing_vpc ? var.vpc_id : module.vpc.vpc_id
+  final_vpc_id     = local.use_existing_vpc ? var.vpc_id : (var.existing_vpc_id != null ? var.existing_vpc_id : module.vpc.vpc_id)
   full_cluster_name = "${var.cluster_name}-${var.environment}"  # e.g. "mlflow-cluster-dev"
 }
 
@@ -15,7 +15,7 @@ module "vpc" {
   private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
   environment          = var.environment
   vpc_id               = var.vpc_id
-  create_vpc           = !var.existing_resources && !local.use_existing_vpc
+  create_vpc           = !var.existing_resources && !local.use_existing_vpc && var.existing_vpc_id == null
 }
 
 # Only create S3 bucket and IAM resources if they don't exist
