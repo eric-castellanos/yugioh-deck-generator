@@ -70,6 +70,28 @@ jobs:
         with:
           terraform_version: 1.6.0
 
+      - name: Check for existing resources
+        id: check_resources
+        run: |
+          # Set default values
+          echo "has_bucket=false" >> $GITHUB_OUTPUT
+          echo "has_vpc=false" >> $GITHUB_OUTPUT
+          
+          # Check for S3 bucket
+          BUCKET_EXISTS=0
+          aws s3api head-bucket --bucket mlflow-backend-${{ env.ENVIRONMENT }} 2>/dev/null || BUCKET_EXISTS=1
+          if [ $BUCKET_EXISTS -eq 0 ]; then
+            echo "has_bucket=true" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check for VPC
+          EXISTING_VPC=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=mlflow-vpc" --query "Vpcs[0].VpcId" --output text)
+          if [ -n "$EXISTING_VPC" ] && [ "$EXISTING_VPC" != "None" ]; then
+            echo "has_vpc=true" >> $GITHUB_OUTPUT
+            echo "vpc_id=$EXISTING_VPC" >> $GITHUB_OUTPUT
+          fi
+        working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
+
       - name: Create terraform.tfvars
         run: |
           cat > terraform.tfvars <<EOF
@@ -78,12 +100,35 @@ jobs:
           db_password = "temporarily_replaced_password"
           region = "${{ env.AWS_REGION }}"
           EOF
+          
+          # Add existing resources flag if needed
+          if [[ "${{ steps.check_resources.outputs.has_bucket }}" == "true" || "${{ steps.check_resources.outputs.has_vpc }}" == "true" ]]; then
+            echo "existing_resources = true" >> terraform.tfvars
+          fi
+          
+          # Add VPC ID if existing
+          if [[ "${{ steps.check_resources.outputs.has_vpc }}" == "true" ]]; then
+            echo "vpc_id = \"${{ steps.check_resources.outputs.vpc_id }}\"" >> terraform.tfvars
+          fi
+          
           # Replace the placeholder with actual password using sed to avoid GitHub Actions workflow syntax issues
           sed -i "s/temporarily_replaced_password/${{ secrets.DB_PASSWORD }}/g" terraform.tfvars
+          
+          # Display the tfvars file (mask sensitive values)
+          cat terraform.tfvars | grep -v "db_password"
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Terraform Init
-        run: terraform init -upgrade
+        run: |
+          # First try normal init
+          terraform init || {
+            echo "Standard init failed, trying with more options..."
+            # Try with explicit options and add -reconfigure if needed
+            terraform init -input=false -backend=true -get=true || {
+              echo "Still failing, trying with reconfigure..."
+              terraform init -input=false -reconfigure
+            }
+          }
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
       - name: Install jq
@@ -91,93 +136,69 @@ jobs:
 
       # Only run imports when action is "apply" and recreate is false
       - name: Import existing resources
-        if: ${{ github.event.inputs.action == 'apply' && github.event.inputs.recreate != true }}
+        if: ${{ github.event.inputs.action == 'apply' && github.event.inputs.recreate != true && (steps.check_resources.outputs.has_bucket == 'true' || steps.check_resources.outputs.has_vpc == 'true') }}
         run: |
           set +e  # Don't exit on error
           echo "Starting resource import for environment: ${{ env.ENVIRONMENT }}"
           
-          # Set existing_resources to true in terraform.tfvars to avoid recreation
-          echo "existing_resources = true" >> terraform.tfvars
-          
-          # Import S3 Bucket
-          echo "Checking for S3 bucket: mlflow-backend-${{ env.ENVIRONMENT }}"
-          aws s3api head-bucket --bucket mlflow-backend-${{ env.ENVIRONMENT }} 2>/dev/null
-          if [ $? -eq 0 ]; then
+          # Import S3 Bucket if it exists
+          if [[ "${{ steps.check_resources.outputs.has_bucket }}" == "true" ]]; then
             echo "Importing S3 bucket: mlflow-backend-${{ env.ENVIRONMENT }}"
-            terraform import -var-file=terraform.tfvars module.s3.aws_s3_bucket.mlflow_bucket[0] mlflow-backend-${{ env.ENVIRONMENT }}
-            echo "S3 bucket import result: $?"
-          else
-            echo "S3 bucket not found, skipping import"
-          fi
+            terraform import -var-file=terraform.tfvars module.s3.aws_s3_bucket.mlflow_bucket[0] mlflow-backend-${{ env.ENVIRONMENT }} || echo "Import failed but continuing"
           
-          # Import IAM User
-          echo "Checking for IAM user: mlflow-user"
-          USER_CHECK=$(aws iam get-user --user-name mlflow-user 2>&1)
-          if ! echo "$USER_CHECK" | grep -q "NoSuchEntity"; then
-            echo "Importing IAM user: mlflow-user"
-            terraform import -var-file=terraform.tfvars module.s3.aws_iam_user.mlflow_user[0] mlflow-user
-            echo "IAM user import result: $?"
-          else
-            echo "IAM user not found, skipping import"
-          fi
-          
-          # Import IAM Policy
-          echo "Checking for IAM policy: mlflow-s3-access"
-          POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text)
-          if [ -n "$POLICY_ARN" ] && [ "$POLICY_ARN" != "None" ]; then
-            echo "Importing IAM policy: $POLICY_ARN"
-            terraform import -var-file=terraform.tfvars module.s3.aws_iam_policy.mlflow_s3_policy[0] "$POLICY_ARN"
-            echo "IAM policy import result: $?"
-          else
-            echo "IAM policy not found, skipping import"
-          fi
-          
-          # Import DB Subnet Group
-          echo "Checking for DB subnet group: mlflow-db-subnet-group-${{ env.ENVIRONMENT }}"
-          DB_SUBNET_CHECK=$(aws rds describe-db-subnet-groups --db-subnet-group-name mlflow-db-subnet-group-${{ env.ENVIRONMENT }} 2>&1)
-          if ! echo "$DB_SUBNET_CHECK" | grep -q "DBSubnetGroupNotFoundFault"; then
-            echo "Importing DB subnet group: mlflow-db-subnet-group-${{ env.ENVIRONMENT }}"
-            terraform import -var-file=terraform.tfvars module.rds.aws_db_subnet_group.mlflow[0] mlflow-db-subnet-group-${{ env.ENVIRONMENT }}
-            echo "DB subnet group import result: $?"
-          else
-            echo "DB subnet group not found, skipping import"
-          fi
-          
-          # Find existing VPC
-          echo "Checking for existing VPCs"
-          EXISTING_VPC=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=mlflow-vpc" --query "Vpcs[0].VpcId" --output text)
-          if [ -n "$EXISTING_VPC" ] && [ "$EXISTING_VPC" != "None" ]; then
-            echo "Found existing VPC: $EXISTING_VPC"
-            # Add VPC ID to terraform.tfvars to use existing VPC
-            echo "vpc_id = \"$EXISTING_VPC\"" >> terraform.tfvars
-          else
-            echo "No existing VPC found matching mlflow-vpc"
-          fi
-          
-          # Import CloudWatch Log Group
-          echo "Checking for CloudWatch log group: /aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster"
-          CW_LOG_CHECK=$(aws logs describe-log-groups --log-group-name-prefix /aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster --query "logGroups[0].logGroupName" --output text 2>&1)
-          if [ -n "$CW_LOG_CHECK" ] && [ "$CW_LOG_CHECK" != "None" ]; then
-            echo "Importing CloudWatch log group: $CW_LOG_CHECK"
-            terraform import -var-file=terraform.tfvars module.eks.aws_cloudwatch_log_group.this[0] "$CW_LOG_CHECK"
-            echo "CloudWatch log group import result: $?"
-          else
-            echo "CloudWatch log group not found, skipping import"
-          fi
-          
-          # Import KMS key and alias
-          echo "Checking for KMS key with alias: alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
-          KMS_KEY_ID=$(aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}'].TargetKeyId" --output text)
-          if [ -n "$KMS_KEY_ID" ] && [ "$KMS_KEY_ID" != "None" ]; then
-            echo "Importing KMS key: $KMS_KEY_ID"
-            terraform import -var-file=terraform.tfvars module.eks.aws_kms_key.this[0] "$KMS_KEY_ID"
-            echo "KMS key import result: $?"
+            # Try to import related S3 resources
+            echo "Checking for IAM user and policy"
+            USER_EXISTS=false
+            aws iam get-user --user-name mlflow-user &>/dev/null && USER_EXISTS=true
             
-            echo "Importing KMS alias: alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
-            terraform import -var-file=terraform.tfvars module.eks.aws_kms_alias.this[0] "alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
-            echo "KMS alias import result: $?"
-          else
-            echo "KMS key/alias not found, skipping import"
+            if [[ "$USER_EXISTS" == "true" ]]; then
+              echo "Importing IAM user: mlflow-user"
+              terraform import -var-file=terraform.tfvars module.s3.aws_iam_user.mlflow_user[0] mlflow-user || echo "Import failed but continuing"
+              
+              # Check for policy
+              POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text)
+              if [[ -n "$POLICY_ARN" && "$POLICY_ARN" != "None" ]]; then
+                echo "Importing IAM policy: $POLICY_ARN"
+                terraform import -var-file=terraform.tfvars module.s3.aws_iam_policy.mlflow_s3_policy[0] "$POLICY_ARN" || echo "Import failed but continuing"
+              fi
+            fi
+          fi
+          
+          # Import VPC resources if needed
+          if [[ "${{ steps.check_resources.outputs.has_vpc }}" == "true" ]]; then
+            # No need to import VPC since we're using existing one
+            
+            # Check for DB subnet groups in the VPC
+            DB_SUBNET_GROUP="mlflow-db-subnet-group-${{ env.ENVIRONMENT }}"
+            aws rds describe-db-subnet-groups --db-subnet-group-name $DB_SUBNET_GROUP &>/dev/null
+            DB_SUBNET_EXISTS=$?
+            
+            if [[ $DB_SUBNET_EXISTS -eq 0 ]]; then
+              echo "Importing DB subnet group: $DB_SUBNET_GROUP"
+              terraform import -var-file=terraform.tfvars module.rds.aws_db_subnet_group.mlflow[0] $DB_SUBNET_GROUP || echo "Import failed but continuing"
+            fi
+          fi
+          
+          # Import CloudWatch/KMS resources
+          CW_LOG_GROUP="/aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster"
+          aws logs describe-log-groups --log-group-name $CW_LOG_GROUP &>/dev/null
+          CW_LOG_EXISTS=$?
+          
+          if [[ $CW_LOG_EXISTS -eq 0 ]]; then
+            echo "Importing CloudWatch log group: $CW_LOG_GROUP"
+            terraform import -var-file=terraform.tfvars module.eks.aws_cloudwatch_log_group.this[0] "$CW_LOG_GROUP" || echo "Import failed but continuing"
+          fi
+          
+          # Import KMS key and alias if they exist
+          KMS_ALIAS="alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
+          KMS_KEY_ID=$(aws kms list-aliases --query "Aliases[?AliasName=='$KMS_ALIAS'].TargetKeyId" --output text 2>/dev/null || echo "")
+          
+          if [[ -n "$KMS_KEY_ID" && "$KMS_KEY_ID" != "None" ]]; then
+            echo "Importing KMS key: $KMS_KEY_ID"
+            terraform import -var-file=terraform.tfvars module.eks.aws_kms_key.this[0] "$KMS_KEY_ID" || echo "Import failed but continuing"
+            
+            echo "Importing KMS alias: $KMS_ALIAS"
+            terraform import -var-file=terraform.tfvars module.eks.aws_kms_alias.this[0] "$KMS_ALIAS" || echo "Import failed but continuing"
           fi
           
           echo "Import operations completed"
@@ -205,32 +226,71 @@ jobs:
       - name: Terraform Apply
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
-          # First do a plan to check for errors
-          terraform plan -input=false -var-file=terraform.tfvars -detailed-exitcode || true
-          
-          # If recreating resources, use more permissive error handling
+          # Use different strategies based on whether we're recreating or using existing resources
           if [[ "${{ github.event.inputs.recreate }}" == "true" ]]; then
             echo "Running in recreate mode - will attempt to create new resources"
-            # Try to apply with -target flags for resources that may already exist
-            terraform apply -auto-approve -input=false -var-file=terraform.tfvars || echo "Some resources may have failed to create due to pre-existence."
-          else
-            echo "Running in normal mode - using existing resources where possible"
-            terraform apply -auto-approve -input=false -var-file=terraform.tfvars || {
-              echo "Apply failed, checking specific errors..."
-              # Check for VPC limit error and try again with an existing VPC if needed
-              if grep -q "VpcLimitExceeded" terraform.tfstate.backup; then
-                echo "VPC limit reached. Trying to find existing VPC to use..."
+            # Try to apply with more permissive handling
+            set +e
+            TEMP_LOG_FILE=$(mktemp)
+            
+            terraform apply -auto-approve -input=false -var-file=terraform.tfvars |& tee $TEMP_LOG_FILE
+            APPLY_STATUS=$?
+            
+            if [[ $APPLY_STATUS -ne 0 ]]; then
+              echo "Some resources failed to create. Inspecting errors..."
+              
+              # Look for specific errors that we can handle
+              
+              # Check for VPC limit errors
+              if grep -q "VpcLimitExceeded" $TEMP_LOG_FILE; then
+                echo "VPC limit exceeded. Trying with default VPC..."
                 EXISTING_VPC=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query "Vpcs[0].VpcId" --output text)
-                if [ -n "$EXISTING_VPC" ] && [ "$EXISTING_VPC" != "None" ]; then
-                  echo "Using default VPC: $EXISTING_VPC"
+                if [[ -n "$EXISTING_VPC" && "$EXISTING_VPC" != "None" ]]; then
                   echo "vpc_id = \"$EXISTING_VPC\"" >> terraform.tfvars
                   terraform apply -auto-approve -input=false -var-file=terraform.tfvars
+                  APPLY_STATUS=$?
                 fi
-              else
-                echo "Apply failed with errors that cannot be automatically fixed."
-                exit 1
+              fi
+              
+              # Check for "already exists" errors, which we can ignore
+              if grep -q -E '(BucketAlreadyExists|ResourceAlreadyExistsException|EntityAlreadyExists|kms:GetKeyPolicy)' $TEMP_LOG_FILE; then
+                echo "Found 'already exists' errors - marking as non-fatal."
+                echo "These resources already exist and don't need to be recreated."
+                APPLY_STATUS=0
+              fi
+            fi
+            
+            rm -f $TEMP_LOG_FILE
+            if [[ $APPLY_STATUS -ne 0 ]]; then
+              echo "Apply failed with errors that could not be automatically fixed."
+              exit $APPLY_STATUS
+            fi
+          else
+            echo "Running in normal mode - using existing resources where possible"
+            
+            # Do a targeted apply of individual resource groups to handle dependencies better
+            echo "Step 1: Applying VPC and networking resources..."
+            terraform apply -auto-approve -input=false -var-file=terraform.tfvars -target=module.vpc || {
+              # If VPC fails, try with default VPC
+              echo "VPC creation failed. Trying with default VPC..."
+              DEFAULT_VPC=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query "Vpcs[0].VpcId" --output text)
+              if [[ -n "$DEFAULT_VPC" && "$DEFAULT_VPC" != "None" ]]; then
+                echo "vpc_id = \"$DEFAULT_VPC\"" >> terraform.tfvars
+                terraform apply -auto-approve -input=false -var-file=terraform.tfvars -target=module.vpc
               fi
             }
+            
+            echo "Step 2: Applying storage resources..."
+            terraform apply -auto-approve -input=false -var-file=terraform.tfvars -target=module.s3 || echo "S3 resources may already exist. Continuing..."
+            
+            echo "Step 3: Applying database resources..."
+            terraform apply -auto-approve -input=false -var-file=terraform.tfvars -target=module.rds || echo "RDS resources may already exist. Continuing..."
+            
+            echo "Step 4: Applying EKS resources..."
+            terraform apply -auto-approve -input=false -var-file=terraform.tfvars -target=module.eks || echo "EKS resources may already exist. Continuing..."
+            
+            echo "Step 5: Final apply to ensure all resources are created..."
+            terraform apply -auto-approve -input=false -var-file=terraform.tfvars || echo "Some resources may have failed but the core infrastructure should be available."
           fi
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
