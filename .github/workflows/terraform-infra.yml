@@ -69,6 +69,7 @@ jobs:
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.0
+          terraform_wrapper: false  # <-- Add this to ensure no wrapper shenanigans
 
       - name: Check for existing resources
         id: check_resources
