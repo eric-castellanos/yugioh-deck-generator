@@ -65,10 +65,22 @@ jobs:
         with:
           terraform_version: 1.6.0
 
-      - name: Configure MLFlow Terraform
+      - name: Check Existing VPCs
+        id: check_vpc
         run: |
-          ENVIRONMENT="${{ github.event.inputs.environment || 'dev' }}"
-          CLUSTER_NAME="mlflow-cluster-${ENVIRONMENT}"
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:Project,Values=mlflow" \
+                     "Name=tag:Environment,Values=${{ github.event.inputs.environment || 'dev' }}" \
+            --query 'Vpcs[0].VpcId' \
+            --output text)
+
+          if [ "$VPC_ID" != "None" ]; then
+            echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
+            echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
+          else
+            echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
+          fi
+        working-directory: ${{ github.workspace }}/infra/terraform/vpc
 
       - name: Create terraform.tfvars file
         run: |
@@ -79,36 +91,9 @@ jobs:
           region = "${{ env.AWS_REGION }}"
           bucket_name = "mlflow-backend-${{ github.event.inputs.environment || 'dev' }}"
           mlflow_user = "mlflow-user-${{ github.event.inputs.environment || 'dev' }}"
+          vpc_id = "${{ steps.check_vpc.outputs.VPC_ID }}"
           EOF
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
-
-      - name: Check Existing VPCs
-        id: check_vpc
-        run: |
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=tag:Project,Values=mlflow" "Name=tag:Environment,Values=${{ github.event.inputs.environment || 'dev' }}" --query 'Vpcs[0].VpcId' --output text)
-          if [ "$VPC_ID" != "None" ]; then
-            echo "VPC_EXISTS=true" >> $GITHUB_OUTPUT
-            echo "VPC_ID=$VPC_ID" >> $GITHUB_OUTPUT
-          else
-            echo "VPC_EXISTS=false" >> $GITHUB_OUTPUT
-          fi
-        working-directory: ${{ github.workspace }}/infra/terraform/vpc
-
-      - name: Set VPC Variables
-        run: |
-          terraform init -input=false -backend=false
-          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
-            echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
-          else
-            VPC_ID_OUTPUT=$(terraform output -raw vpc_id 2>/dev/null || true)
-            if [ -n "$VPC_ID_OUTPUT" ]; then
-              echo "VPC_ID=$VPC_ID_OUTPUT" >> $GITHUB_ENV
-            else
-              echo "VPC_ID=" >> $GITHUB_ENV
-              echo "Warning: terraform output -raw vpc_id failed or returned empty" >&2
-            fi
-          fi
-        working-directory: ${{ github.workspace }}/infra/terraform/vpc
 
       - name: Import Existing Resources
         if: ${{ env.TF_ACTION == 'apply' }}
@@ -136,15 +121,14 @@ jobs:
       - name: Terraform Apply
         run: |
           terraform init -upgrade
-      
           MAX_RETRIES=3
           RETRY_DELAY=10
           SUCCESS=false
-      
+
           for ((i=1; i<=MAX_RETRIES; i++)); do
             echo "Attempt $i of $MAX_RETRIES"
             terraform plan -out=tfplan
-      
+
             if terraform apply -auto-approve tfplan; then
               echo "Terraform apply successful"
               SUCCESS=true
@@ -163,7 +147,7 @@ jobs:
               fi
             fi
           done
-      
+
           if [[ "$SUCCESS" == "false" ]]; then
             echo "All Terraform apply attempts failed. Exiting."
             exit 1
