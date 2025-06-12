@@ -99,7 +99,13 @@ jobs:
           if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
             echo "VPC_ID=${{ steps.check_vpc.outputs.VPC_ID }}" >> $GITHUB_ENV
           else
-            echo "VPC_ID=$(terraform output -raw vpc_id)" >> $GITHUB_ENV
+            VPC_ID_OUTPUT=$(terraform output -raw vpc_id 2>/dev/null)
+            if [ -n "$VPC_ID_OUTPUT" ]; then
+              echo "VPC_ID=$VPC_ID_OUTPUT" >> $GITHUB_ENV
+            else
+              echo "VPC_ID=" >> $GITHUB_ENV
+              echo "Warning: terraform output -raw vpc_id failed or returned empty" >&2
+            fi
           fi
         working-directory: ${{ github.workspace }}/infra/terraform/vpc
 
