@@ -27,7 +27,8 @@ resource "aws_kms_key" "this" {
           "kms:ListAliases",
           "kms:CreateAlias",
           "kms:UpdateAlias",
-          "kms:TagResource"
+          "kms:TagResource",
+          "kms:PutKeyPolicy"
         ],
         Resource = "*"
       }
