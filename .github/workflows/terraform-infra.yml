@@ -114,25 +114,53 @@ jobs:
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
           terraform init -upgrade
+
+          # Import existing VPC
+          if [ "${{ steps.check_vpc.outputs.VPC_EXISTS }}" = "true" ]; then
+            echo "Importing existing VPC: ${{ steps.check_vpc.outputs.VPC_ID }}"
+            terraform import module.vpc.module.vpc.aws_vpc.this[0] ${{ steps.check_vpc.outputs.VPC_ID }}
+
+            # Import subnets for the VPC (example assumes naming convention)
+            SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=${{ steps.check_vpc.outputs.VPC_ID }}" --query "Subnets[*].SubnetId" --output text)
+            i=0
+            for subnet_id in $SUBNET_IDS; do
+              terraform import "module.vpc.module.vpc.aws_subnet.public[${i}]" $subnet_id || true
+              terraform import "module.vpc.module.vpc.aws_subnet.private[${i}]" $subnet_id || true
+              i=$((i+1))
+            done
+          fi
+
+          # Import S3 bucket
           if aws s3api head-bucket --bucket mlflow-backend-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.s3.aws_s3_bucket.mlflow_bucket mlflow-backend-${{ github.event.inputs.environment }}
           fi
+
+          # Import IAM user
           if aws iam get-user --user-name mlflow-user-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.s3.aws_iam_user.mlflow_user mlflow-user-${{ github.event.inputs.environment }}
           fi
+
+          # Import IAM policy
           POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='mlflow-s3-access'].Arn" --output text)
           if [ -n "$POLICY_ARN" ]; then
             terraform import module.s3.aws_iam_policy.mlflow_s3_policy $POLICY_ARN
           fi
+
+          # Import CloudWatch Log Group
           if aws logs describe-log-groups --log-group-name /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster 2>/dev/null; then
             terraform import module.eks.module.eks.aws_cloudwatch_log_group.this[0] /aws/eks/mlflow-cluster-${{ github.event.inputs.environment }}/cluster
           fi
+
+          # Import KMS Alias
           if aws kms list-aliases --query "Aliases[?AliasName=='alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}'].TargetKeyId" --output text | grep -q .; then
             terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mlflow-cluster-${{ github.event.inputs.environment }}
           fi
+
+          # Import RDS DB Subnet Group
           if aws rds describe-db-subnet-groups --db-subnet-group-name mlflow-db-subnet-group-${{ github.event.inputs.environment }} 2>/dev/null; then
             terraform import module.rds.aws_db_subnet_group.mlflow mlflow-db-subnet-group-${{ github.event.inputs.environment }}
           fi
+
           terraform state list || echo "No state yet"
         working-directory: ${{ github.workspace }}/${{ env.TF_SOURCE_DIR }}
 
