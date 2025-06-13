@@ -8,6 +8,13 @@ on:
         description: "Type 'destroy' to confirm"
         required: true
 
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
 jobs:
   terraform-destroy:
     if: ${{ github.event.inputs.confirm == 'destroy' }}
