@@ -203,6 +203,11 @@ jobs:
           echo "Resource detection and import completed."
 
       
+      - name: Delay for resource propagation
+        run: |
+          echo "Waiting for resources to propagate..."
+          sleep 60
+
       - name: Terraform Plan
         id: terraform_plan
         if: ${{ env.TF_ACTION == 'plan' || github.event_name != 'workflow_dispatch' }}
