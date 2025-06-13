@@ -204,6 +204,7 @@ jobs:
 
       
       - name: Delay for resource propagation
+        if: ${{ env.TF_ACTION == 'apply' }}
         run: |
           echo "Waiting for resources to propagate..."
           sleep 60
