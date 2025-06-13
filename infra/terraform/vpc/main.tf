@@ -35,7 +35,7 @@ data "aws_subnets" "private" {
 }
 
 locals {
-  use_existing_vpc = var.vpc_id != null && var.vpc_id != "" || length(data.aws_vpc.existing.id) > 0
+  use_existing_vpc = var.vpc_id != null && var.vpc_id != "" || (data.aws_vpc.existing.id != null && data.aws_vpc.existing.id != "")
   final_vpc_id     = local.use_existing_vpc ? (var.vpc_id != null && var.vpc_id != "" ? var.vpc_id : data.aws_vpc.existing.id) : module.vpc[0].vpc_id
 }
 
