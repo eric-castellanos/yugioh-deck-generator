@@ -153,7 +153,7 @@ jobs:
           for STATE_PATH in "${!RESOURCES[@]}"; do
             RESOURCE_ID="${RESOURCES[$STATE_PATH]}"
             if [[ -z "$RESOURCE_ID" || "$RESOURCE_ID" == "None" ]]; then
-              echo "Skipping $STATE_PATH because no valid resource ID was found."
+              echo "Skipping $STATE_PATH because no valid resource ID was found (ID='$RESOURCE_ID')."
               continue
             fi
 
@@ -201,12 +201,6 @@ jobs:
           done
 
           echo "Resource detection and import completed."
-
-      - name: Delay for resource propagation
-        if: ${{ env.TF_ACTION == 'apply' }}
-        run: |
-          echo "Waiting for resources to propagate..."
-          sleep 60
 
       - name: Terraform Plan
         id: terraform_plan

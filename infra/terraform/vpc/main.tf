@@ -33,7 +33,7 @@ module "vpc" {
 
   count = local.use_existing_vpc ? 0 : 1
 
-  name = var.name
+  name = "${var.name}-${var.environment}"
   cidr = var.vpc_cidr
 
   azs             = var.azs
