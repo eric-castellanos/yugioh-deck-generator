@@ -111,13 +111,11 @@ jobs:
         run: |
           echo "Detecting and importing existing resources in ${{ env.ENVIRONMENT }} environment..."
 
-          # Ensure Terraform is initialized so the state is accessible
           terraform init -input=false || {
             echo "Terraform init failed. Cannot proceed with import."
             exit 1
           }
 
-          # Check for existing VPC by Name and Environment tags
           VPC_NAME="mlflow-vpc-${{ env.ENVIRONMENT }}"
           EXISTING_VPC_ID=$(aws ec2 describe-vpcs \
             --filters "Name=tag:Name,Values=$VPC_NAME" "Name=tag:Environment,Values=${{ env.ENVIRONMENT }}" \
@@ -130,15 +128,23 @@ jobs:
             EXISTING_VPC_ID=""
           fi
 
-          # Define resources to check and import
+          CLUSTER_NAME="mlflow-cluster-${{ env.ENVIRONMENT }}"
+          if aws eks describe-cluster --name "$CLUSTER_NAME" >/dev/null 2>&1; then
+            echo "EKS cluster $CLUSTER_NAME exists. Fetching VPC subnets..."
+            SUBNET_IDS=$(aws eks describe-cluster --name "$CLUSTER_NAME" --query "cluster.resourcesVpcConfig.subnetIds" --output text)
+            if [[ -n "$SUBNET_IDS" ]]; then
+              echo "subnet_ids=$SUBNET_IDS" >> $GITHUB_ENV
+            fi
+          fi
+
           declare -A RESOURCES=(
             ["module.vpc.aws_vpc.this[0]"]="$EXISTING_VPC_ID"
             ["module.rds.aws_db_instance.mlflow_db"]="mlflow-db-${{ env.ENVIRONMENT }}"
-            ["module.eks.module.eks.aws_eks_cluster.this[0]"]="mlflow-cluster-${{ env.ENVIRONMENT }}"
-            ["module.eks.aws_cloudwatch_log_group.this[0]"]="/aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster"
+            ["module.eks.module.eks.aws_eks_cluster.this[0]"]="$CLUSTER_NAME"
+            ["module.eks.aws_cloudwatch_log_group.this[0]"]="/aws/eks/$CLUSTER_NAME/cluster"
             ["module.eks.aws_iam_role.eks_node_group"]="eks_node_group"
             ["module.eks.aws_kms_key.this[0]"]="5dd32b2c-2af3-443b-b016-6aa30c16b6a6"
-            ["module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"]="alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
+            ["module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"]="alias/eks/$CLUSTER_NAME"
             ["module.s3.aws_s3_bucket.mlflow_bucket[0]"]="mlflow-backend-${{ env.ENVIRONMENT }}"
             ["module.s3.aws_iam_user.mlflow_user[0]"]="mlflow-user"
             ["module.s3.aws_iam_policy.mlflow_s3_policy[0]"]="arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:policy/mlflow-s3-access"
@@ -151,7 +157,6 @@ jobs:
               continue
             fi
 
-            # Determine AWS CLI command based on resource type
             if [[ $STATE_PATH == *"aws_db_instance"* ]]; then
               CHECK_CMD="aws rds describe-db-instances --db-instance-identifier $RESOURCE_ID"
             elif [[ $STATE_PATH == *"aws_eks_cluster"* ]]; then
@@ -177,14 +182,9 @@ jobs:
               continue
             fi
 
-            # Check if resource exists in AWS
             if eval "$CHECK_CMD" >/dev/null 2>&1; then
               echo "Resource exists in AWS: $RESOURCE_ID"
-
-              # Escape brackets in Terraform address for grep
               GREP_SAFE_STATE_PATH=$(echo "$STATE_PATH" | sed 's/\[/\\[/g' | sed 's/\]/\\]/g')
-
-              # Import only if not already in Terraform state
               if terraform state list | grep -q "$GREP_SAFE_STATE_PATH"; then
                 echo "Resource already in Terraform state: $STATE_PATH"
               else
@@ -202,7 +202,6 @@ jobs:
 
           echo "Resource detection and import completed."
 
-      
       - name: Delay for resource propagation
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
