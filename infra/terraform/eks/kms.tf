@@ -40,6 +40,6 @@ resource "aws_kms_key" "this" {
 }
 
 resource "aws_kms_alias" "this" {
-  name          = "alias/eks/${var.cluster_name}-${var.environment}"
+  name          = "alias/eks/${var.cluster_name}"
   target_key_id = aws_kms_key.this.key_id
 }
