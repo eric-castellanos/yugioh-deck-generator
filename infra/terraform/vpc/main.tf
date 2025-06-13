@@ -1,15 +1,3 @@
-data "aws_vpc" "existing" {
-  filter {
-    name   = "tag:Environment"
-    values = [var.environment]
-  }
-
-  filter {
-    name   = "tag:Project"
-    values = ["mlflow"]
-  }
-}
-
 data "aws_subnets" "public" {
   filter {
     name   = "tag:kubernetes.io/role/elb"
