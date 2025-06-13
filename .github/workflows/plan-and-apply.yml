@@ -1,0 +1,45 @@
+# .github/workflows/plan-and-apply.yml
+name: Terraform Plan & Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: dev
+      TF_ACTION: ${{ github.event.inputs.action }}
+      AWS_REGION: us-east-1
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Plan
+        if: ${{ env.TF_ACTION == 'plan' }}
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: terraform apply -auto-approve tfplan
