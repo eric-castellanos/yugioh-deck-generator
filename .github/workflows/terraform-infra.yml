@@ -104,6 +104,7 @@ jobs:
             echo "Terraform init failed. Check the logs for more details."
             exit $INIT_STATUS
           fi
+      
       - name: Detect and Import Existing Resources
         id: import_resources
         if: ${{ env.TF_ACTION == 'apply' }}
@@ -116,8 +117,22 @@ jobs:
             exit 1
           }
 
+          # Check for existing VPC by Name and Environment tags
+          VPC_NAME="mlflow-vpc-${{ env.ENVIRONMENT }}"
+          EXISTING_VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:Name,Values=$VPC_NAME" "Name=tag:Environment,Values=${{ env.ENVIRONMENT }}" \
+            --query "Vpcs[0].VpcId" --output text 2>/dev/null)
+
+          if [[ "$EXISTING_VPC_ID" != "None" && "$EXISTING_VPC_ID" != "" ]]; then
+            echo "Existing VPC found: $EXISTING_VPC_ID"
+          else
+            echo "No existing VPC found. Terraform will attempt to create a new one."
+            EXISTING_VPC_ID=""
+          fi
+
           # Define resources to check and import
           declare -A RESOURCES=(
+            ["module.vpc.aws_vpc.this[0]"]="$EXISTING_VPC_ID"
             ["module.rds.aws_db_instance.mlflow_db"]="mlflow-db-${{ env.ENVIRONMENT }}"
             ["module.eks.module.eks.aws_eks_cluster.this[0]"]="mlflow-cluster-${{ env.ENVIRONMENT }}"
             ["module.eks.aws_cloudwatch_log_group.this[0]"]="/aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster"
@@ -152,6 +167,8 @@ jobs:
               CHECK_CMD="aws iam get-user --user-name $RESOURCE_ID"
             elif [[ $STATE_PATH == *"aws_iam_policy"* ]]; then
               CHECK_CMD="aws iam get-policy --policy-arn $RESOURCE_ID"
+            elif [[ $STATE_PATH == *"aws_vpc"* ]]; then
+              CHECK_CMD="aws ec2 describe-vpcs --vpc-ids $RESOURCE_ID"
             else
               echo "Unknown resource type for $STATE_PATH. Skipping."
               continue
@@ -182,7 +199,6 @@ jobs:
 
           echo "Resource detection and import completed."
 
- 
       
       - name: Terraform Plan
         id: terraform_plan
@@ -228,21 +244,21 @@ jobs:
         if: ${{ env.TF_ACTION == 'apply' }}
         run: |
           echo "Running terraform apply for ${{ env.ENVIRONMENT }} environment"
-          
+
           # Verify terraform is properly set up before applying
           terraform -v
-          
+
           # Run the apply with proper error handling
           echo "Applying terraform configuration..."
-          
+
           # Capture output to analyze for common errors
-          APPLY_OUTPUT=$(terraform apply -auto-approve -input=false -var-file=terraform.tfvars 2>&1) || APPLY_STATUS=$?
-          
+          APPLY_OUTPUT=$(terraform apply -auto-approve -input=false -var="vpc_id=${{ steps.check_vpc.outputs.vpc_id }}" -var-file=terraform.tfvars 2>&1) || APPLY_STATUS=$?
+
           # Check for already exists errors
           if echo "$APPLY_OUTPUT" | grep -q "already exists"; then
             echo "Some resources already exist but weren't properly imported. Check import step logs."
             echo "$APPLY_OUTPUT"
-            
+
             if [ "${{ github.event.inputs.recreate }}" == "true" ]; then
               echo "Recreate flag is set. Attempting to continue despite errors..."
               echo "$APPLY_OUTPUT"
@@ -257,7 +273,7 @@ jobs:
           else
             echo "$APPLY_OUTPUT"
             echo "Terraform apply completed successfully!"
-            
+
             # Output some useful information about the created resources
             echo "Outputting created resource information:"
             terraform output
