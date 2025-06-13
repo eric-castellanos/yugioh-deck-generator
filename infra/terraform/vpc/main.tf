@@ -24,3 +24,18 @@ module "vpc" {
     Project     = "mlflow"
   }
 }
+
+data "aws_subnets" "all" {
+  filter {
+    name   = "vpc-id"
+    values = [local.final_vpc_id]
+  }
+}
+
+output "private_subnet_ids" {
+  value = local.use_existing_vpc ? (length(data.aws_subnets.all.ids) > 0 ? data.aws_subnets.all.ids : ["subnet-12345678", "subnet-87654321"]) : module.vpc[0].private_subnets
+}
+
+output "public_subnet_ids" {
+  value = local.use_existing_vpc ? (length(data.aws_subnets.all.ids) > 0 ? data.aws_subnets.all.ids : ["subnet-12345678", "subnet-87654321"]) : module.vpc[0].public_subnets
+}

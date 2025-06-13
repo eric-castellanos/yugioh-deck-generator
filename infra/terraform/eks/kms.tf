@@ -39,7 +39,27 @@ resource "aws_kms_key" "this" {
   })
 }
 
+data "aws_kms_alias" "existing" {
+  name = "alias/eks/${var.cluster_name}-${var.environment}"
+}
+
 resource "aws_kms_alias" "this" {
-  name          = "alias/eks/${var.cluster_name}"
+  count = data.aws_kms_alias.existing.id == "" ? 1 : 0
+
+  name          = "alias/eks/${var.cluster_name}-${var.environment}"
+  target_key_id = aws_kms_key.this.key_id
+}
+
+resource "aws_kms_alias" "imported" {
+  count = data.aws_kms_alias.existing.id != "" ? 1 : 0
+
+  name          = data.aws_kms_alias.existing.name
+  target_key_id = data.aws_kms_alias.existing.target_key_id
+}
+
+resource "aws_kms_alias" "fallback" {
+  count = data.aws_kms_alias.existing.id == "" ? 1 : 0
+
+  name          = "alias/eks/${var.cluster_name}-${var.environment}-fallback"
   target_key_id = aws_kms_key.this.key_id
 }
