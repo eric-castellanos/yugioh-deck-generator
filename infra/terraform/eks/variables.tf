@@ -47,5 +47,5 @@ variable "github_actions_role_arn" {
 }
 
 locals {
-  full_cluster_name = "${var.cluster_name}-${var.environment}"
+  full_cluster_name = "${var.cluster_name}"
 }
