@@ -110,6 +110,12 @@ jobs:
         run: |
           echo "Detecting and importing existing resources in ${{ env.ENVIRONMENT }} environment..."
 
+          # Ensure Terraform is initialized so the state is accessible
+          terraform init -input=false || {
+            echo "Terraform init failed. Cannot proceed with import."
+            exit 1
+          }
+
           # Define resources to check and import
           declare -A RESOURCES=(
             ["module.rds.aws_db_instance.mlflow_db"]="mlflow-db-${{ env.ENVIRONMENT }}"
@@ -125,7 +131,6 @@ jobs:
 
           for STATE_PATH in "${!RESOURCES[@]}"; do
             RESOURCE_ID="${RESOURCES[$STATE_PATH]}"
-
             echo "Checking resource: $STATE_PATH with ID: $RESOURCE_ID"
 
             # Determine AWS CLI command based on resource type
@@ -140,7 +145,7 @@ jobs:
             elif [[ $STATE_PATH == *"aws_kms_key"* ]]; then
               CHECK_CMD="aws kms describe-key --key-id $RESOURCE_ID"
             elif [[ $STATE_PATH == *"aws_kms_alias"* ]]; then
-              CHECK_CMD="aws kms describe-alias --alias-name $RESOURCE_ID --region ${{ env.AWS_REGION }}"
+              CHECK_CMD="aws kms list-aliases --region ${{ env.AWS_REGION }} | grep \"${RESOURCE_ID}\""
             elif [[ $STATE_PATH == *"aws_s3_bucket"* ]]; then
               CHECK_CMD="aws s3api head-bucket --bucket $RESOURCE_ID"
             elif [[ $STATE_PATH == *"aws_iam_user"* ]]; then
@@ -156,26 +161,27 @@ jobs:
             if eval "$CHECK_CMD" >/dev/null 2>&1; then
               echo "Resource exists in AWS: $RESOURCE_ID"
 
-              # Escape brackets for grep if needed
+              # Escape brackets in Terraform address for grep
               GREP_SAFE_STATE_PATH=$(echo "$STATE_PATH" | sed 's/\[/\\[/g' | sed 's/\]/\\]/g')
 
               # Import only if not already in Terraform state
               if terraform state list | grep -q "$GREP_SAFE_STATE_PATH"; then
-                echo "Resource already exists in Terraform state: $STATE_PATH"
+                echo "Resource already in Terraform state: $STATE_PATH"
               else
                 echo "Importing resource into Terraform state: $STATE_PATH"
                 terraform import "$STATE_PATH" "$RESOURCE_ID" || {
-                  echo "Failed to import resource: $RESOURCE_ID. Ensure it exists in the correct region."
+                  echo "Failed to import resource: $RESOURCE_ID"
                   exit 1
                 }
               fi
             else
               echo "Resource not found in AWS: $RESOURCE_ID"
-              echo "Proceeding to let Terraform create it."
+              echo "Letting Terraform create it."
             fi
           done
 
           echo "Resource detection and import completed."
+
  
       
       - name: Terraform Plan
