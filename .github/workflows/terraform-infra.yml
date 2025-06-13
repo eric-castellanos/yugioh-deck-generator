@@ -185,7 +185,7 @@ jobs:
           terraform -v
           
           # Run the plan with proper error handling
-          terraform plan -input=false -var-file=terraform.tfvars
+          terraform plan -input=false -var="cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" -var-file=terraform.tfvars
           PLAN_STATUS=$?
           
           if [ $PLAN_STATUS -ne 0 ]; then
