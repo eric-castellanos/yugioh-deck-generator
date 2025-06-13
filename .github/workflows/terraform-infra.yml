@@ -104,7 +104,6 @@ jobs:
             echo "Terraform init failed. Check the logs for more details."
             exit $INIT_STATUS
           fi
-        
       - name: Detect and Import Existing Resources
         id: import_resources
         if: ${{ env.TF_ACTION == 'apply' }}
@@ -153,27 +152,31 @@ jobs:
               continue
             fi
 
-            # Check if resource exists
+            # Check if resource exists in AWS
             if eval "$CHECK_CMD" >/dev/null 2>&1; then
-              echo "Resource exists: $RESOURCE_ID"
+              echo "Resource exists in AWS: $RESOURCE_ID"
 
-              # Import resource into Terraform state if not already imported
-              if ! terraform state list "$STATE_PATH" 2>/dev/null; then
+              # Escape brackets for grep if needed
+              GREP_SAFE_STATE_PATH=$(echo "$STATE_PATH" | sed 's/\[/\\[/g' | sed 's/\]/\\]/g')
+
+              # Import only if not already in Terraform state
+              if terraform state list | grep -q "$GREP_SAFE_STATE_PATH"; then
+                echo "Resource already exists in Terraform state: $STATE_PATH"
+              else
                 echo "Importing resource into Terraform state: $STATE_PATH"
                 terraform import "$STATE_PATH" "$RESOURCE_ID" || {
-                  echo "Failed to import resource: $RESOURCE_ID. Ensure it exists in the correct region.";
-                  exit 1;
+                  echo "Failed to import resource: $RESOURCE_ID. Ensure it exists in the correct region."
+                  exit 1
                 }
-              else
-                echo "Resource already exists in Terraform state: $STATE_PATH"
               fi
             else
-              echo "Resource not found: $RESOURCE_ID"
-              echo "Proceeding to create the resource using Terraform."
+              echo "Resource not found in AWS: $RESOURCE_ID"
+              echo "Proceeding to let Terraform create it."
             fi
           done
 
           echo "Resource detection and import completed."
+ 
       
       - name: Terraform Plan
         id: terraform_plan
