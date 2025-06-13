@@ -13,6 +13,13 @@ on:
           - plan
           - apply
 
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
 jobs:
   terraform:
     runs-on: ubuntu-latest
