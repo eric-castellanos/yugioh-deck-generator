@@ -206,7 +206,14 @@ jobs:
           else
             echo "Terraform configuration is valid!"
           fi
-          
+
+      - name: Debug TF State After Import
+        run: |
+          echo "Listing state after import:"
+          terraform state list || echo "State list failed"
+          echo "Checking for KMS alias:"
+          terraform state show module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"] || echo "KMS alias not found in state"
+          echo "Checking for S3 bucket:"  
       - name: Terraform Apply
         id: terraform_apply
         if: ${{ env.TF_ACTION == 'apply' }}
