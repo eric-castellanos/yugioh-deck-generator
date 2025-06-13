@@ -35,8 +35,8 @@ data "aws_subnets" "private" {
 }
 
 locals {
-  use_existing_vpc = var.vpc_id != null && var.vpc_id != "" || (data.aws_vpc.existing.id != null && data.aws_vpc.existing.id != "")
-  final_vpc_id     = local.use_existing_vpc ? (var.vpc_id != null && var.vpc_id != "" ? var.vpc_id : data.aws_vpc.existing.id) : module.vpc[0].vpc_id
+  use_existing_vpc = var.vpc_id != null && var.vpc_id != ""
+  final_vpc_id     = local.use_existing_vpc ? var.vpc_id : module.vpc[0].vpc_id
 }
 
 module "vpc" {
@@ -67,4 +67,11 @@ output "public_subnet_ids" {
 
 output "private_subnet_ids" {
   value = local.use_existing_vpc ? (length(data.aws_subnets.private.ids) > 0 ? data.aws_subnets.private.ids : []) : module.vpc[0].private_subnets
+}
+
+output "vpc_filter_debug" {
+  value = {
+    Environment = var.environment,
+    Project     = "mlflow"
+  }
 }
