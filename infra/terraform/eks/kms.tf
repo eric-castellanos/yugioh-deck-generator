@@ -56,10 +56,3 @@ resource "aws_kms_alias" "imported" {
   name          = data.aws_kms_alias.existing.name
   target_key_id = data.aws_kms_alias.existing.target_key_id
 }
-
-resource "aws_kms_alias" "fallback" {
-  count = data.aws_kms_alias.existing.id == "" ? 1 : 0
-
-  name          = "alias/eks/${var.cluster_name}-fallback"
-  target_key_id = aws_kms_key.this.key_id
-}

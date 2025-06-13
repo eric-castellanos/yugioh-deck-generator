@@ -32,10 +32,10 @@ data "aws_subnets" "all" {
   }
 }
 
-output "private_subnet_ids" {
-  value = local.use_existing_vpc ? (length(data.aws_subnets.all.ids) > 0 ? data.aws_subnets.all.ids : ["subnet-12345678", "subnet-87654321"]) : module.vpc[0].private_subnets
+output "public_subnet_ids" {
+  value = local.use_existing_vpc ? data.aws_subnets.all.ids : module.vpc[0].public_subnets
 }
 
-output "public_subnet_ids" {
-  value = local.use_existing_vpc ? (length(data.aws_subnets.all.ids) > 0 ? data.aws_subnets.all.ids : ["subnet-12345678", "subnet-87654321"]) : module.vpc[0].public_subnets
+output "private_subnet_ids" {
+  value = local.use_existing_vpc ? data.aws_subnets.all.ids : module.vpc[0].private_subnets
 }
