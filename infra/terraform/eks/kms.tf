@@ -40,13 +40,13 @@ resource "aws_kms_key" "this" {
 }
 
 data "aws_kms_alias" "existing" {
-  name = "alias/eks/${var.cluster_name}-${var.environment}"
+  name = "alias/eks/${var.cluster_name}"
 }
 
 resource "aws_kms_alias" "this" {
   count = data.aws_kms_alias.existing.id == "" ? 1 : 0
 
-  name          = "alias/eks/${var.cluster_name}-${var.environment}"
+  name          = "alias/eks/${var.cluster_name}"
   target_key_id = aws_kms_key.this.key_id
 }
 
@@ -60,6 +60,6 @@ resource "aws_kms_alias" "imported" {
 resource "aws_kms_alias" "fallback" {
   count = data.aws_kms_alias.existing.id == "" ? 1 : 0
 
-  name          = "alias/eks/${var.cluster_name}-${var.environment}-fallback"
+  name          = "alias/eks/${var.cluster_name}-fallback"
   target_key_id = aws_kms_key.this.key_id
 }
