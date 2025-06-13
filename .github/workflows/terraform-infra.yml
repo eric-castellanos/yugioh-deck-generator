@@ -125,7 +125,8 @@ jobs:
           if [[ "$EXISTING_VPC_ID" != "None" && "$EXISTING_VPC_ID" != "" ]]; then
             echo "Existing VPC found: $EXISTING_VPC_ID"
             echo "Importing VPC into Terraform state..."
-            terraform import "module.vpc" "$EXISTING_VPC_ID" || {
+            # Correct resource address for VPC import
+            terraform import "module.vpc.aws_vpc.this[0]" "$EXISTING_VPC_ID" || {
               echo "Failed to import VPC: $EXISTING_VPC_ID"
               exit 1
             }
