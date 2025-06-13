@@ -43,6 +43,8 @@ module "eks" {
   cluster_version             = var.cluster_version
   vpc_id                      = local.final_vpc_id
   subnet_ids                  = module.vpc.private_subnet_ids
+  public_subnet_ids           = module.vpc.public_subnet_ids
+  private_subnet_ids          = module.vpc.private_subnet_ids
   create_resources            = !var.existing_resources
   create_cloudwatch_log_group = false # Disable creation of CloudWatch Log Group
   account_id                  = var.account_id

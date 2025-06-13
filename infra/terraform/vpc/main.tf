@@ -25,7 +25,24 @@ module "vpc" {
   }
 }
 
-data "aws_subnets" "all" {
+data "aws_subnets" "public" {
+  filter {
+    name   = "tag:kubernetes.io/role/elb"
+    values = ["1"]
+  }
+
+  filter {
+    name   = "vpc-id"
+    values = [local.final_vpc_id]
+  }
+}
+
+data "aws_subnets" "private" {
+  filter {
+    name   = "tag:kubernetes.io/role/internal-elb"
+    values = ["1"]
+  }
+
   filter {
     name   = "vpc-id"
     values = [local.final_vpc_id]
@@ -33,9 +50,9 @@ data "aws_subnets" "all" {
 }
 
 output "public_subnet_ids" {
-  value = local.use_existing_vpc ? data.aws_subnets.all.ids : module.vpc[0].public_subnets
+  value = local.use_existing_vpc ? (length(data.aws_subnets.public.ids) > 0 ? data.aws_subnets.public.ids : []) : module.vpc[0].public_subnets
 }
 
 output "private_subnet_ids" {
-  value = local.use_existing_vpc ? data.aws_subnets.all.ids : module.vpc[0].private_subnets
+  value = local.use_existing_vpc ? (length(data.aws_subnets.private.ids) > 0 ? data.aws_subnets.private.ids : []) : module.vpc[0].private_subnets
 }
