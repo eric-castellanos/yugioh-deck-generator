@@ -60,7 +60,7 @@ jobs:
           DESTROY_EXIT_CODE=$?
 
           # Extract lock ID
-          LOCK_ID=$(sed -E 's/\x1b\[[0-9;]*m//g' "$RAW_LOG" | awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}')
+          LOCK_ID=$(grep -Eo 'ID:[[:space:]]+[a-f0-9-]+' "$RAW_LOG" | awk '{print $2}')
 
           if [[ -n "$LOCK_ID" ]]; then
             echo "Terraform state lock detected: $LOCK_ID"
