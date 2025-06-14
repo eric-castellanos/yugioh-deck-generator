@@ -51,6 +51,7 @@ jobs:
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
             -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
             -no-color \
+            -out=tfplan \
             > $RAW_LOG 2>&1
 
             PLAN_EXIT_CODE=$?
@@ -83,6 +84,7 @@ jobs:
           terraform plan -input=false \
             -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
             -out=tfplan
 
       - name: Terraform Apply
