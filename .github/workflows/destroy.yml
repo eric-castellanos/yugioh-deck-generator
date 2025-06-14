@@ -56,9 +56,10 @@ jobs:
             -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
             -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
-            -target=module.eks \
-            -target=module.mlflow \
             > $RAW_LOG 2>&1
+          
+          #-target=module.eks \
+          #-target=module.mlflow \
 
           DESTROY_EXIT_CODE=$?
 
@@ -90,8 +91,8 @@ jobs:
             -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
             -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
-            -target=module.eks \
-            -target=module.mlflow
+            # -target=module.eks \
+            # -target=module.mlflow
 
       - name: Upload Destroy Log
         uses: actions/upload-artifact@v4
