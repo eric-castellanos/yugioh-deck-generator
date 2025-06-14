@@ -44,4 +44,20 @@ jobs:
         run: terraform init -input=false
 
       - name: Terraform Destroy
-        run: terraform destroy -auto-approve
+        run: |
+            export TF_LOG=DEBUG
+            export TF_LOG_PATH=destroy.log
+
+            terraform destroy -auto-approve \
+            -target=module.eks \ 
+            -target=module.mlflow
+
+            echo "Terraform destroy completed. Output log:"
+            cat destroy.log
+
+      - name: Upload destroy log
+        uses: actions/upload-artifact@v4
+        with:
+            name: destroy-log
+            path: destroy.log
+
