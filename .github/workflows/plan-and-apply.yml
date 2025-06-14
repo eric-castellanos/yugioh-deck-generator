@@ -40,7 +40,7 @@ jobs:
         run: terraform init -input=false
 
       - name: Terraform Plan
-        run: terraform plan -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" -out=tfplan
+        run: terraform plan -input=false -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" -var-file=terraform.tfvars -out=tfplan
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan
