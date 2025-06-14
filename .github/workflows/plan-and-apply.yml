@@ -39,6 +39,13 @@ jobs:
       - name: Terraform Init
         run: terraform init -input=false
 
+      - name: Debug tfvars presence
+        run: |
+            echo "Current working directory: $(pwd)"
+            echo "Contents:"
+            ls -la
+            cat terraform.tfvars || echo "No terraform.tfvars found"
+
       - name: Terraform Plan
         run: terraform plan -input=false -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" -var-file=terraform.tfvars -out=tfplan
 
