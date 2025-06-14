@@ -53,6 +53,8 @@ jobs:
           RAW_LOG="raw_destroy_output.txt"
 
           terraform destroy -auto-approve \
+            -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
+            -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
             -target=module.eks \
             -target=module.mlflow \
             > $RAW_LOG 2>&1
@@ -84,6 +86,8 @@ jobs:
         if: ${{ steps.destroy.outputs.destroy_success == 'false' }}
         run: |
           terraform destroy -input=false -auto-approve \
+            -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
+            -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
             -target=module.eks \
             -target=module.mlflow
 
