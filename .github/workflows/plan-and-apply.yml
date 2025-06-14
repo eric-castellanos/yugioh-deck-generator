@@ -41,22 +41,26 @@ jobs:
         id: plan
         continue-on-error: true
         run: |
-          terraform plan -input=false \
+            set -o pipefail
+
+            PLAN_LOG="plan_output.txt"
+            RAW_LOG="raw_plan_output.txt"
+
+            terraform plan -input=false \
             -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
-            -out=tfplan 2>&1 | tee plan_output.txt
+            -no-color \
+            > $RAW_LOG 2>&1 || true
 
-          sed 's/\x1b\[[0-9;]*m//g' raw_plan_output.txt > plan_output.txt
-          LOCK_ID=$(awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}' plan_output.txt)
+            # Extract lock ID safely
+            LOCK_ID=$(awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}' $RAW_LOG)
 
-          if [[ -n "$LOCK_ID" ]]; then
+            if [[ -n "$LOCK_ID" ]]; then
             echo "Terraform state lock detected: $LOCK_ID"
             echo "lock_id=$LOCK_ID" >> $GITHUB_OUTPUT
-            echo "plan_success=false" >> $GITHUB_OUTPUT
-          else
-            echo "No lock detected."
-            echo "plan_success=true" >> $GITHUB_OUTPUT
-          fi
+            else
+            echo "No state lock detected."
+            fi
 
       - name: Terraform Force Unlock (if needed)
         if: ${{ steps.plan.outputs.lock_id != '' }}
