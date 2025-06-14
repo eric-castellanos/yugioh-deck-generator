@@ -82,7 +82,7 @@ jobs:
       - name: Terraform Destroy (retry after unlock)
         if: ${{ steps.destroy.outputs.destroy_success == 'false' }}
         run: |
-          terraform destroy -auto-approve \
+          terraform destroy -input=false -auto-approve \
             -target=module.eks \
             -target=module.mlflow
 
