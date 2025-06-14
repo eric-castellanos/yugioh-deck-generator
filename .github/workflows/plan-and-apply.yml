@@ -53,7 +53,7 @@ jobs:
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
             -out=tfplan 2>&1 | tee plan_output.txt
 
-          LOCK_ID=$(grep -A5 'Error acquiring the state lock' plan_output.txt | grep 'ID:' | awk '{print $2}')
+          LOCK_ID=$(awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}' plan_output.txt)
 
           if [[ -n "$LOCK_ID" ]]; then
             echo "Terraform state lock detected: $LOCK_ID"
