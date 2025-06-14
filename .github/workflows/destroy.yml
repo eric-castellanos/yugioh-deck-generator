@@ -21,6 +21,7 @@ jobs:
     env:
       ENVIRONMENT: dev
       AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: true
 
     defaults:
       run:
@@ -59,7 +60,7 @@ jobs:
           DESTROY_EXIT_CODE=$?
 
           # Extract lock ID
-          LOCK_ID=$(awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}' $RAW_LOG)
+          LOCK_ID=$(sed -E 's/\x1b\[[0-9;]*m//g' "$RAW_LOG" | awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}')
 
           if [[ -n "$LOCK_ID" ]]; then
             echo "Terraform state lock detected: $LOCK_ID"
