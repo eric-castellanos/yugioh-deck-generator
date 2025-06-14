@@ -1,4 +1,3 @@
-# .github/workflows/destroy.yml
 name: Terraform Destroy
 
 on:
@@ -43,22 +42,54 @@ jobs:
       - name: Terraform Init
         run: terraform init -input=false
 
-      - name: Terraform Destroy
+      - name: Terraform Destroy (initial attempt)
+        id: destroy
+        continue-on-error: true
+        shell: bash
         run: |
-            export TF_LOG=DEBUG
-            export TF_LOG_PATH=destroy.log
+          set +e
+          set -o pipefail
+          RAW_LOG="raw_destroy_output.txt"
 
-            terraform destroy -auto-approve \
+          terraform destroy -auto-approve \
+            -target=module.eks \
+            -target=module.mlflow \
+            > $RAW_LOG 2>&1
+
+          DESTROY_EXIT_CODE=$?
+
+          # Extract lock ID
+          LOCK_ID=$(awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}' $RAW_LOG)
+
+          if [[ -n "$LOCK_ID" ]]; then
+            echo "Terraform state lock detected: $LOCK_ID"
+            echo "lock_id=$LOCK_ID" >> $GITHUB_OUTPUT
+          else
+            echo "lock_id=" >> $GITHUB_OUTPUT
+          fi
+
+          # Export success status
+          if [[ $DESTROY_EXIT_CODE -eq 0 ]]; then
+            echo "destroy_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "destroy_success=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Terraform Force Unlock (if needed)
+        if: ${{ steps.destroy.outputs.lock_id != '' }}
+        run: terraform force-unlock -force ${{ steps.destroy.outputs.lock_id }}
+
+      - name: Terraform Destroy (retry after unlock)
+        if: ${{ steps.destroy.outputs.destroy_success == 'false' }}
+        run: |
+          terraform destroy -auto-approve \
             -target=module.eks \
             -target=module.mlflow
 
-            echo "Terraform destroy completed. Output log:"
-            cat destroy.log
-
-
-      - name: Upload destroy log
+      - name: Upload Destroy Log
         uses: actions/upload-artifact@v4
         with:
-            name: destroy-log
-            path: destroy.log
+          name: destroy-log
+          path: infra/terraform/raw_destroy_output.txt
+
 
