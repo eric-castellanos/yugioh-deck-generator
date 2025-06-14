@@ -1,4 +1,3 @@
-# .github/workflows/plan-and-apply.yml
 name: Terraform Plan & Apply
 
 on:
@@ -16,13 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ENVIRONMENT: dev
-      TF_ACTION: ${{ github.event.inputs.action }}
       AWS_REGION: us-east-1
 
     defaults:
       run:
         working-directory: infra/terraform
-    
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -41,13 +39,47 @@ jobs:
 
       - name: Debug tfvars presence
         run: |
-            echo "Current working directory: $(pwd)"
-            echo "Contents:"
-            ls -la
-            cat terraform.tfvars || echo "No terraform.tfvars found"
+          echo "Current working directory: $(pwd)"
+          echo "Contents:"
+          ls -la
+          cat terraform.tfvars || echo "No terraform.tfvars found"
 
-      - name: Terraform Plan
-        run: terraform plan -input=false -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" -out=tfplan
+      - name: Terraform Plan (initial attempt)
+        id: plan
+        continue-on-error: true
+        run: |
+          terraform plan -input=false \
+            -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
+            -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -out=tfplan 2>&1 | tee plan_output.txt
+
+          LOCK_ID=$(grep -A5 'Error acquiring the state lock' plan_output.txt | grep 'ID:' | awk '{print $2}')
+
+          if [[ -n "$LOCK_ID" ]]; then
+            echo "Terraform state lock detected: $LOCK_ID"
+            echo "lock_id=$LOCK_ID" >> $GITHUB_OUTPUT
+            echo "plan_success=false" >> $GITHUB_OUTPUT
+          else
+            echo "No lock detected."
+            echo "plan_success=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Terraform Force Unlock (if needed)
+        if: ${{ steps.plan.outputs.lock_id != '' }}
+        run: terraform force-unlock -force ${{ steps.plan.outputs.lock_id }}
+
+      - name: Terraform Plan (retry after unlock)
+        id: plan_retry
+        if: ${{ steps.plan.outputs.plan_success == 'false' }}
+        run: |
+          terraform plan -input=false \
+            -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
+            -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -out=tfplan
 
       - name: Terraform Apply
+        if: |
+          (steps.plan.outputs.plan_success == 'true' && steps.plan.outcome == 'success') ||
+          (steps.plan.outputs.plan_success == 'false' && steps.plan_retry.outcome == 'success')
         run: terraform apply -auto-approve tfplan
+
