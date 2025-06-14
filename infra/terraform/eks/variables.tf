@@ -23,8 +23,11 @@ variable "node_instance_type" {
 variable "vpc_id" {}
 
 variable "subnet_ids" {
-  type = list(string)
+  description = "List of subnet IDs for EKS cluster and node groups"
+  type        = list(string)
+  default     = []
 }
+
 
 variable "environment" {
   default = "dev"

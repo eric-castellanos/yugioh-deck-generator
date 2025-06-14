@@ -4,7 +4,7 @@ module "eks" {
 
   cluster_name = local.full_cluster_name
   vpc_id       = var.vpc_id
-  subnet_ids   = var.private_subnet_ids
+  subnet_ids = length(var.subnet_ids) > 0 ? var.subnet_ids : ["placeholder-subnet"]
 
   create_cloudwatch_log_group = var.create_cloudwatch_log_group
 
@@ -35,6 +35,8 @@ resource "aws_cloudwatch_log_group" "this" {
 }
 
 resource "aws_eks_node_group" "default_node_group" {
+  count           = length(var.subnet_ids) > 0 ? 1 : 0
+
   cluster_name    = local.full_cluster_name
   node_group_name = "default_node_group"
   node_role_arn   = aws_iam_role.eks_node_group.arn
@@ -46,8 +48,12 @@ resource "aws_eks_node_group" "default_node_group" {
     min_size     = 1
   }
 
-  instance_types = ["t3.medium"]
+  instance_types = [var.node_instance_type]
   capacity_type  = "ON_DEMAND"
+
+  tags = {
+    Environment = var.environment
+  }
 }
 
 resource "aws_iam_role" "eks_node_group" {
