@@ -49,6 +49,7 @@ jobs:
             terraform plan -input=false \
             -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
             -no-color \
             > $RAW_LOG 2>&1
 
