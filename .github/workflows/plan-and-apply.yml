@@ -3,15 +3,6 @@ name: Terraform Plan & Apply
 
 on:
   workflow_dispatch:
-    inputs:
-      action:
-        description: 'Action to perform'
-        required: true
-        default: 'plan'
-        type: choice
-        options:
-          - plan
-          - apply
 
 permissions:
   id-token: write
@@ -49,9 +40,7 @@ jobs:
         run: terraform init -input=false
 
       - name: Terraform Plan
-        if: ${{ env.TF_ACTION == 'plan' }}
         run: terraform plan -out=tfplan
 
       - name: Terraform Apply
-        if: ${{ env.TF_ACTION == 'apply' }}
         run: terraform apply -auto-approve tfplan
