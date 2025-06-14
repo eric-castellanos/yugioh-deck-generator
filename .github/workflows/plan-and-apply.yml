@@ -37,13 +37,6 @@ jobs:
       - name: Terraform Init
         run: terraform init -input=false
 
-      - name: Debug tfvars presence
-        run: |
-          echo "Current working directory: $(pwd)"
-          echo "Contents:"
-          ls -la
-          cat terraform.tfvars || echo "No terraform.tfvars found"
-
       - name: Terraform Plan (initial attempt)
         id: plan
         continue-on-error: true
