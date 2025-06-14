@@ -56,15 +56,17 @@ jobs:
             LOCK_ID=$(awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}' $RAW_LOG)
 
             if [[ -n "$LOCK_ID" ]]; then
-            echo "Terraform state lock detected: $LOCK_ID"
-            echo "lock_id=$LOCK_ID" >> $GITHUB_OUTPUT
+                echo "Terraform state lock detected: $LOCK_ID"
+                echo "lock_id=$LOCK_ID" >> $GITHUB_OUTPUT
             fi
 
             # Export success status
             if [[ $PLAN_EXIT_CODE -eq 0 ]]; then
-            echo "plan_success=true" >> $GITHUB_OUTPUT
+                echo "plan_success=true" >> $GITHUB_OUTPUT
+                exit 0
             else
-            echo "plan_success=false" >> $GITHUB_OUTPUT
+                echo "plan_success=false" >> $GITHUB_OUTPUT
+                exit 0
             fi
 
       - name: Terraform Force Unlock (if needed)
