@@ -23,6 +23,10 @@ jobs:
       ENVIRONMENT: dev
       AWS_REGION: us-east-1
 
+    defaults:
+      run:
+        working-directory: infra/terraform
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4

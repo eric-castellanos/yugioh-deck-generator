@@ -27,6 +27,11 @@ jobs:
       ENVIRONMENT: dev
       TF_ACTION: ${{ github.event.inputs.action }}
       AWS_REGION: us-east-1
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+    
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
