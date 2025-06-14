@@ -55,6 +55,7 @@ jobs:
           terraform destroy -auto-approve \
             -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
             -target=module.eks \
             -target=module.mlflow \
             > $RAW_LOG 2>&1
@@ -88,6 +89,7 @@ jobs:
           terraform destroy -input=false -auto-approve \
             -var "db_password=${{ secrets.MLFLOW_DB_PASSWORD }}" \
             -var "account_id=${{ secrets.AWS_ACCOUNT_ID }}" \
+            -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
             -target=module.eks \
             -target=module.mlflow
 
