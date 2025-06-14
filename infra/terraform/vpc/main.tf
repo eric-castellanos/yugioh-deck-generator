@@ -31,8 +31,6 @@ module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "5.1.1"
 
-  count = local.use_existing_vpc ? 0 : 1
-
   name = "${var.name}-${var.environment}"
   cidr = var.vpc_cidr
 
@@ -47,14 +45,6 @@ module "vpc" {
     Environment = var.environment
     Project     = "mlflow"
   }
-}
-
-output "public_subnet_ids" {
-  value = local.use_existing_vpc ? (length(data.aws_subnets.public.ids) > 0 ? data.aws_subnets.public.ids : []) : module.vpc[0].public_subnets
-}
-
-output "private_subnet_ids" {
-  value = local.use_existing_vpc ? (length(data.aws_subnets.private.ids) > 0 ? data.aws_subnets.private.ids : []) : module.vpc[0].private_subnets
 }
 
 output "vpc_filter_debug" {

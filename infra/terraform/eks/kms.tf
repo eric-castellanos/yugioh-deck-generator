@@ -40,12 +40,10 @@ resource "aws_kms_key" "this" {
 }
 
 data "aws_kms_alias" "existing" {
-  name = "alias/eks/${var.cluster_name}"
+  name = "alias/eks/${var.cluster_name}-${var.environment}"
 }
 
 resource "aws_kms_alias" "this" {
-  count = data.aws_kms_alias.existing.id != "" ? 0 : 1
-
   name          = "alias/eks/${var.cluster_name}"
   target_key_id = aws_kms_key.this.key_id
 }

@@ -1,11 +1,11 @@
 output "db_endpoint" {
-  value = var.create_resources ? aws_db_instance.mlflow[0].endpoint : ""
+  value = aws_db_instance.mlflow.endpoint
 }
 
 output "db_name" {
-  value = var.create_resources ? aws_db_instance.mlflow[0].db_name : ""
+  value = aws_db_instance.mlflow.db_name
 }
 
 output "db_username" {
-  value = var.create_resources ? aws_db_instance.mlflow[0].username : ""
+  value = aws_db_instance.mlflow.username
 }

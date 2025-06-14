@@ -182,6 +182,20 @@
 				"dynamodb:DeleteItem"
 			],
 			"Resource": "arn:aws:dynamodb:us-east-1:256995722813:table/terraform-locks"
+		},
+		{
+			"Effect": "Allow",
+			"Action": [
+				"kms:DescribeKey"
+			],
+			"Resource": "arn:aws:kms:us-east-1:256995722813:key/f7673df3-dbd4-4465-ad28-8d749cfc3598"
+		},
+		{
+			"Effect": "Allow",
+			"Action": [
+				"kms:DescribeKey"
+			],
+			"Resource": "arn:aws:kms:us-east-1:256995722813:key/f7673df3-dbd4-4465-ad28-8d749cfc3598"
 		}
 	]
 }

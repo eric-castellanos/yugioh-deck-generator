@@ -1,0 +1,267 @@
+name: Terraform Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      recreate:
+        description: 'Recreate existing resources if they exist'
+        required: false
+        default: false
+        type: boolean
+      action:
+        description: 'Action to perform (plan/apply/destroy)'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      environment:
+        description: 'Environment (dev/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+      source_dir:
+        description: 'Source directory for Terraform files'
+        required: true
+        default: 'infra/terraform'
+        type: string
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ github.workspace }}/${{ github.event.inputs.source_dir || 'infra/terraform' }}
+    env:
+      TF_ACTION: ${{ github.event.inputs.action || 'plan' }}
+      TF_SOURCE_DIR: ${{ github.event.inputs.source_dir || 'infra/terraform' }}
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false  # Disable wrapper to avoid issues with shell commands
+
+      - name: Create terraform.tfvars
+        run: |
+          # Get current AWS account ID
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text)
+          
+          # Create the file with a temporary placeholder for password
+          cat > terraform.tfvars <<EOF
+          environment = "${{ env.ENVIRONMENT }}"
+          cluster_name = "mlflow-cluster-${{ env.ENVIRONMENT }}"
+          db_password = "temporarily_replaced_password"
+          region = "${{ env.AWS_REGION }}"
+          account_id = "$AWS_ACCOUNT_ID"
+          github_actions_role_arn = "${{ secrets.AWS_ROLE_TO_ASSUME }}"
+          EOF
+          
+          # Replace the placeholder with actual password using sed to avoid GitHub Actions workflow syntax issues
+          sed -i "s/temporarily_replaced_password/${{ secrets.DB_PASSWORD }}/g" terraform.tfvars
+          
+          # Display the tfvars file (without showing sensitive values)
+          cat terraform.tfvars | grep -v "db_password"
+
+      - name: Terraform Init
+        id: terraform_init
+        run: |
+          terraform init -upgrade
+          INIT_STATUS=$?
+          if [ $INIT_STATUS -ne 0 ]; then
+            echo "Terraform init failed. Check the logs for more details."
+            exit $INIT_STATUS
+          fi
+      
+      - name: Detect and Import Existing Resources
+        id: import_resources
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: |
+          echo "Detecting and importing existing resources in ${{ env.ENVIRONMENT }} environment..."
+
+          terraform init -input=false || {
+            echo "Terraform init failed. Cannot proceed with import."
+            exit 1
+          }
+
+          # Check for existing VPC by Name and Environment tags
+          VPC_NAME="mlflow-vpc-${{ env.ENVIRONMENT }}"
+          EXISTING_VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:Name,Values=$VPC_NAME" "Name=tag:Environment,Values=${{ env.ENVIRONMENT }}" \
+            --query "Vpcs[0].VpcId" --output text 2>/dev/null)
+
+          if [[ "$EXISTING_VPC_ID" != "None" && "$EXISTING_VPC_ID" != "" ]]; then
+            echo "Existing VPC found: $EXISTING_VPC_ID"
+            echo "Importing VPC into Terraform state..."
+            # Correct resource address for VPC import
+            terraform import "module.vpc.aws_vpc.this[0]" "$EXISTING_VPC_ID" || {
+              echo "Failed to import VPC: $EXISTING_VPC_ID"
+              exit 1
+            }
+          else
+            echo "No existing VPC found. Terraform will attempt to create a new one."
+          fi
+
+          # Keep checks and imports for all AWS resources
+          declare -A RESOURCES=(
+            ["module.vpc.aws_vpc.this[0]"]="$EXISTING_VPC_ID"
+            ["module.rds.aws_db_instance.mlflow_db"]="mlflow-db-${{ env.ENVIRONMENT }}"
+            ["module.eks.module.eks.aws_eks_cluster.this[0]"]="mlflow-cluster-${{ env.ENVIRONMENT }}"
+            ["module.eks.aws_cloudwatch_log_group.this[0]"]="/aws/eks/mlflow-cluster-${{ env.ENVIRONMENT }}/cluster"
+            ["module.eks.aws_iam_role.eks_node_group"]="eks_node_group"
+            ["module.eks.aws_kms_key.this[0]"]="5dd32b2c-2af3-443b-b016-6aa30c16b6a6"
+            ["module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"]"]="alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
+            ["module.s3.aws_s3_bucket.mlflow_bucket[0]"]="mlflow-backend-${{ env.ENVIRONMENT }}"
+            ["module.s3.aws_iam_user.mlflow_user[0]"]="mlflow-user"
+            ["module.s3.aws_iam_policy.mlflow_s3_policy[0]"]="arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:policy/mlflow-s3-access"
+          )
+
+          for STATE_PATH in "${!RESOURCES[@]}"; do
+            RESOURCE_ID="${RESOURCES[$STATE_PATH]}"
+            if [[ -z "$RESOURCE_ID" || "$RESOURCE_ID" == "None" ]]; then
+              echo "Skipping $STATE_PATH because no valid resource ID was found."
+              continue
+            fi
+
+            if terraform state list | grep -q "$STATE_PATH"; then
+              echo "Resource already in Terraform state: $STATE_PATH"
+            else
+              echo "Importing resource into Terraform state: $STATE_PATH"
+              terraform import "$STATE_PATH" "$RESOURCE_ID" || {
+                echo "Failed to import resource: $RESOURCE_ID"
+                exit 1
+              }
+            fi
+          done
+          echo "Resource detection and import completed."
+
+      - name: Terraform Plan
+        id: terraform_plan
+        if: ${{ env.TF_ACTION == 'plan' || github.event_name != 'workflow_dispatch' }}
+        run: |
+          echo "Running terraform plan for ${{ env.ENVIRONMENT }} environment"
+          
+          # Verify terraform is properly set up
+          terraform -v
+          
+          # Run the plan with proper error handling
+          terraform plan -input=false -var="cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" -var-file=terraform.tfvars
+          PLAN_STATUS=$?
+          
+          if [ $PLAN_STATUS -ne 0 ]; then
+            echo "Terraform plan failed. Check the logs for more details."
+            exit $PLAN_STATUS
+          fi
+        
+      - name: Terraform Validate
+        id: terraform_validate
+        run: |
+          echo "Validating Terraform configuration..."
+          terraform validate
+          VALIDATE_STATUS=$?
+          
+          if [ $VALIDATE_STATUS -ne 0 ]; then
+            echo "Terraform validation failed. Please check your configuration files."
+            exit $VALIDATE_STATUS
+          else
+            echo "Terraform configuration is valid!"
+          fi
+
+      - name: Debug TF State After Import
+        run: |
+          echo "Listing state after import:"
+          terraform state list || echo "State list failed"
+          echo "Checking for KMS alias:"
+          terraform state show module.eks.module.eks.module.kms.aws_kms_alias.this[\"cluster\"] || echo "KMS alias not found in state"
+          echo "Checking for S3 bucket:"  
+      - name: Terraform Apply
+        id: terraform_apply
+        if: ${{ env.TF_ACTION == 'apply' }}
+        run: |
+          echo "Running terraform apply for ${{ env.ENVIRONMENT }} environment"
+
+          # Verify terraform is properly set up before applying
+          terraform -v
+
+          # Run the apply with proper error handling
+          echo "Applying terraform configuration..."
+
+          # Capture output to analyze for common errors
+          APPLY_OUTPUT=$(terraform apply -auto-approve -input=false -var="vpc_id=${{ steps.import_resources.outputs.vpc_id }}" -var-file=terraform.tfvars 2>&1) || APPLY_STATUS=$?
+
+          # Check for already exists errors
+          if echo "$APPLY_OUTPUT" | grep -q "already exists"; then
+            echo "Some resources already exist but weren't properly imported. Check import step logs."
+            echo "$APPLY_OUTPUT"
+
+            if [ "${{ github.event.inputs.recreate }}" == "true" ]; then
+              echo "Recreate flag is set. Attempting to continue despite errors..."
+              echo "$APPLY_OUTPUT"
+            else
+              echo "Use the 'recreate' option if you want to replace existing resources."
+              exit 1
+            fi
+          elif [ ! -z "$APPLY_STATUS" ]; then
+            echo "$APPLY_OUTPUT"
+            echo "Terraform apply failed with status: $APPLY_STATUS"
+            exit $APPLY_STATUS
+          else
+            echo "$APPLY_OUTPUT"
+            echo "Terraform apply completed successfully!"
+
+            # Output some useful information about the created resources
+            echo "Outputting created resource information:"
+            terraform output
+          fi
+          
+      - name: Terraform Destroy
+        id: terraform_destroy
+        if: ${{ env.TF_ACTION == 'destroy' }}
+        run: |
+          echo "Running terraform destroy for ${{ env.ENVIRONMENT }} environment"
+          
+          # Confirm destruction intent in logs
+          echo "WARNING: About to destroy all resources in ${{ env.ENVIRONMENT }} environment"
+          
+          # Run the destroy with proper error handling
+          terraform destroy -auto-approve -input=false -var-file=terraform.tfvars
+          DESTROY_STATUS=$?
+          
+          if [ $DESTROY_STATUS -ne 0 ]; then
+            echo "Terraform destroy failed. Check the logs for more details."
+            exit $DESTROY_STATUS
+          else
+            echo "Terraform destroy completed successfully. All resources have been removed."
+          fi

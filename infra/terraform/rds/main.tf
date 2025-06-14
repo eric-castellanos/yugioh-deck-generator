@@ -7,8 +7,6 @@ locals {
 }
 
 resource "aws_db_subnet_group" "mlflow" {
-  count = var.create_resources ? 1 : 0
-
   name        = local.resource_names.subnet_group
   description = "Subnet group for MLFlow RDS instance"
   subnet_ids  = var.subnet_ids
@@ -45,8 +43,6 @@ resource "aws_security_group" "mlflow_rds_sg" {
 }
 
 resource "aws_db_instance" "mlflow" {
-  count = var.create_resources ? 1 : 0
-
   identifier             = local.resource_names.db_instance
   allocated_storage      = var.allocated_storage
   engine                 = "postgres"
@@ -55,7 +51,7 @@ resource "aws_db_instance" "mlflow" {
   db_name                = "${var.db_name}-${var.environment}"
   username               = var.db_username
   password               = var.db_password
-  db_subnet_group_name   = aws_db_subnet_group.mlflow[0].name
+  db_subnet_group_name   = aws_db_subnet_group.mlflow.name
   vpc_security_group_ids = [aws_security_group.mlflow_rds_sg.id]
   skip_final_snapshot    = true
   publicly_accessible    = true # False in production

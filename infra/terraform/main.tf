@@ -30,7 +30,7 @@ module "s3" {
 module "rds" {
   source           = "./rds"
   environment      = var.environment
-  subnet_ids       = module.vpc.private_subnet_ids
+  subnet_ids       = length(var.subnet_ids) > 0 ? var.subnet_ids : module.vpc.private_subnet_ids
   db_password      = var.db_password
   region           = var.region
   vpc_id           = local.final_vpc_id
@@ -42,7 +42,8 @@ module "eks" {
   cluster_name                = var.cluster_name
   cluster_version             = var.cluster_version
   vpc_id                      = local.final_vpc_id
-  subnet_ids                  = module.vpc.private_subnet_ids
+  subnet_ids                  = length(var.subnet_ids) > 0 ? var.subnet_ids : module.vpc.private_subnet_ids
+  control_plane_subnet_ids    = var.control_plane_subnet_ids
   public_subnet_ids           = module.vpc.public_subnet_ids
   private_subnet_ids          = module.vpc.private_subnet_ids
   create_resources            = !var.existing_resources

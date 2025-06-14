@@ -28,6 +28,11 @@ variable "subnet_ids" {
   default     = []
 }
 
+variable "control_plane_subnet_ids" {
+  description = "Subnet IDs for the EKS control plane"
+  type        = list(string)
+  default     = []
+}
 
 variable "environment" {
   default = "dev"
@@ -50,5 +55,10 @@ variable "github_actions_role_arn" {
 }
 
 locals {
-  full_cluster_name = "${var.cluster_name}"
+  full_cluster_name = "${var.cluster_name}-${var.environment}"
+}
+
+output "effective_control_plane_subnet_ids" {
+  description = "Effective subnet IDs for the EKS control plane"
+  value       = coalescelist(var.control_plane_subnet_ids, var.subnet_ids)
 }

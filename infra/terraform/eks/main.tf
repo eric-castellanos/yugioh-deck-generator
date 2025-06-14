@@ -4,7 +4,7 @@ module "eks" {
 
   cluster_name = local.full_cluster_name
   vpc_id       = var.vpc_id
-  subnet_ids = length(var.subnet_ids) > 0 ? var.subnet_ids : ["placeholder-subnet"]
+  subnet_ids   = var.subnet_ids
 
   create_cloudwatch_log_group = var.create_cloudwatch_log_group
 
@@ -20,8 +20,6 @@ variable "log_retention_in_days" {
 }
 
 resource "aws_cloudwatch_log_group" "this" {
-  count = var.create_resources ? 1 : 0
-
   name              = "/aws/eks/${local.full_cluster_name}/cluster"
   retention_in_days = var.log_retention_in_days
 
@@ -35,8 +33,6 @@ resource "aws_cloudwatch_log_group" "this" {
 }
 
 resource "aws_eks_node_group" "default_node_group" {
-  count           = length(var.subnet_ids) > 0 ? 1 : 0
-
   cluster_name    = local.full_cluster_name
   node_group_name = "default_node_group"
   node_role_arn   = aws_iam_role.eks_node_group.arn

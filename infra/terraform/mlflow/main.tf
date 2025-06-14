@@ -144,10 +144,8 @@ resource "aws_efs_file_system" "mlflow" {
 }
 
 resource "aws_efs_mount_target" "mlflow" {
-  count = length(data.aws_subnet_ids.default.ids)
-
   file_system_id  = aws_efs_file_system.mlflow.id
-  subnet_id       = data.aws_subnet_ids.default.ids[count.index]
+  subnet_id       = data.aws_subnet_ids.default.ids[0]
   security_groups = [aws_security_group.mlflow.id]
 }
 
