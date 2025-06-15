@@ -74,7 +74,7 @@ jobs:
             --output text 2>/dev/null || echo "")
           
           if [ -z "$RDS_ENDPOINT" ]; then
-            echo "❌ RDS instance not found. Make sure infrastructure is deployed first."
+            echo "RDS instance not found. Make sure infrastructure is deployed first."
             exit 1
           fi
           
@@ -174,7 +174,7 @@ jobs:
           # Delete any remaining LoadBalancer services
           kubectl delete svc --all-namespaces --field-selector spec.type=LoadBalancer --timeout=300s
           
-          echo "✅ MLflow resources destroyed"
+          echo "MLflow resources destroyed"
 
       - name: Prepare Kubernetes Manifests
         if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
@@ -331,13 +331,13 @@ jobs:
         if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
         run: |
           if [ "${{ env.ACTION }}" == "redeploy" ]; then
-            echo "🔄 Redeploying MLflow..."
+            echo "Redeploying MLflow..."
             kubectl delete deployment mlflow -n mlflow --ignore-not-found=true
             kubectl delete service mlflow-ingress -n mlflow --ignore-not-found=true
             sleep 10
           fi
           
-          echo "🚀 Deploying MLflow..."
+          echo "Deploying MLflow..."
           
           # Apply manifests
           kubectl apply -f k8s-manifests/mlflow-deployment.yaml
@@ -346,12 +346,12 @@ jobs:
           # Wait for deployment
           kubectl wait --for=condition=available --timeout=600s deployment/mlflow -n mlflow
           
-          echo "✅ MLflow deployment completed"
+          echo "MLflow deployment completed"
 
       - name: Get MLflow Access Information
         if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
         run: |
-          echo "📋 MLflow Deployment Information:"
+          echo "MLflow Deployment Information:"
           echo "================================"
           
           # Get pod status
@@ -365,7 +365,7 @@ jobs:
           for i in {1..60}; do
             EXTERNAL_IP=$(kubectl get svc mlflow-ingress -n mlflow -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
             if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
-              echo "✅ MLflow UI available at: http://$EXTERNAL_IP"
+              echo "MLflow UI available at: http://$EXTERNAL_IP"
               echo "::notice::MLflow UI available at: http://$EXTERNAL_IP"
               break
             fi
@@ -374,15 +374,15 @@ jobs:
           done
           
           if [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" == "null" ]; then
-            echo "⚠️  LoadBalancer external IP not ready yet. Check later with:"
-            echo "   kubectl get svc mlflow-ingress -n mlflow"
+            echo "LoadBalancer external IP not ready yet. Check later with:"
+            echo "kubectl get svc mlflow-ingress -n mlflow"
           fi
 
       - name: Test MLflow Health
         if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
         continue-on-error: true
         run: |
-          echo "🏥 Testing MLflow health..."
+          echo "Testing MLflow health..."
           
           # Port-forward to test internally
           kubectl port-forward svc/mlflow 8080:5000 -n mlflow &
@@ -392,9 +392,9 @@ jobs:
           
           # Test health endpoint
           if curl -f http://localhost:8080/health; then
-            echo "✅ MLflow health check passed"
+            echo "MLflow health check passed"
           else
-            echo "❌ MLflow health check failed"
+            echo "MLflow health check failed"
           fi
           
           # Clean up port-forward
@@ -403,7 +403,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "🎯 MLflow Kubernetes Deployment Summary"
+          echo "MLflow Kubernetes Deployment Summary"
           echo "======================================="
           echo "Environment: ${{ env.ENVIRONMENT }}"
           echo "Action: ${{ env.ACTION }}"
@@ -411,11 +411,7 @@ jobs:
           echo ""
           
           if [ "${{ env.ACTION }}" == "destroy" ]; then
-            echo "✅ MLflow resources have been destroyed"
+            echo "MLflow resources have been destroyed"
           else
-            echo "✅ MLflow deployment completed"
-            echo "📍 Next steps:"
-            echo "   1. Check LoadBalancer external IP: kubectl get svc mlflow-ingress -n mlflow"
-            echo "   2. Access MLflow UI at the external IP"
-            echo "   3. Verify S3 artifact storage is working"
+            echo "MLflow deployment completed"
           fi
