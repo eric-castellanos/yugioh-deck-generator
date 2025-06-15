@@ -114,22 +114,11 @@ jobs:
 
       - name: Setup Terraform Backend Configuration
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          STATE_BUCKET="terraform-state-mlflow-${ACCOUNT_ID}-${{ env.ENVIRONMENT }}"
-          DYNAMODB_TABLE="terraform-locks-mlflow-${{ env.ENVIRONMENT }}"
+          # Remove any dynamically created backend.tf to avoid conflicts
+          rm -f backend.tf
           
-          # Create backend configuration
-          cat > backend.tf << EOF
-          terraform {
-            backend "s3" {
-              bucket         = "${STATE_BUCKET}"
-              key            = "mlflow/terraform.tfstate"
-              region         = "${{ env.AWS_REGION }}"
-              encrypt        = true
-              dynamodb_table = "${DYNAMODB_TABLE}"
-            }
-          }
-          EOF
+          # The backend is already configured in terraform.tf
+          echo "Using existing backend configuration from terraform.tf"
 
       - name: Create Environment-Specific tfvars
         run: |
