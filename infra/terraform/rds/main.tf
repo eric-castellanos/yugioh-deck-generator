@@ -46,9 +46,9 @@ resource "aws_db_instance" "mlflow" {
   identifier             = local.resource_names.db_instance
   allocated_storage      = var.allocated_storage
   engine                 = "postgres"
-  engine_version         = "14.7"
+  engine_version         = "14.13"
   instance_class         = var.db_instance_class
-  db_name                = "${var.db_name}-${var.environment}"
+  db_name                = "${replace(var.db_name, "-", "_")}_${var.environment}"
   username               = var.db_username
   password               = var.db_password
   db_subnet_group_name   = aws_db_subnet_group.mlflow.name

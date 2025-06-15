@@ -1,0 +1,174 @@
+module.vpc.module.vpc.aws_vpc.this[0]: Refreshing state... [id=vpc-0cc147bc52a3499da]
+module.s3.data.aws_iam_policy_document.mlflow_s3_policy: Reading...
+module.s3.aws_iam_user.mlflow_user: Refreshing state... [id=mlflow-user-dev]
+module.s3.aws_s3_bucket.mlflow_bucket: Refreshing state... [id=mlflow-backend-dev]
+module.s3.data.aws_iam_policy_document.mlflow_s3_policy: Read complete after 0s [id=2145740427]
+module.eks.data.aws_kms_alias.existing: Reading...
+module.eks.module.eks.data.aws_caller_identity.current: Reading...
+module.eks.module.eks.module.kms.data.aws_caller_identity.current[0]: Reading...
+module.eks.aws_cloudwatch_log_group.this: Refreshing state... [id=/aws/eks/mlflow-cluster-dev/cluster]
+module.eks.aws_kms_key.this: Refreshing state... [id=cf5707c4-7611-4a2f-bc00-19927eabb98f]
+module.eks.aws_iam_role.eks_node_group: Refreshing state... [id=eks_node_group]
+module.eks.module.eks.data.aws_caller_identity.current: Read complete after 0s [id=256995722813]
+module.eks.module.eks.module.kms.data.aws_partition.current[0]: Reading...
+module.eks.module.eks.module.kms.data.aws_partition.current[0]: Read complete after 0s [id=aws]
+module.eks.module.eks.data.aws_partition.current: Reading...
+module.eks.module.eks.data.aws_partition.current: Read complete after 0s [id=aws]
+module.s3.aws_iam_policy.mlflow_s3_policy: Refreshing state... [id=arn:aws:iam::256995722813:policy/mlflow-s3-access]
+module.eks.module.eks.module.kms.data.aws_caller_identity.current[0]: Read complete after 0s [id=256995722813]
+module.eks.module.eks.data.aws_iam_session_context.current: Reading...
+module.eks.module.eks.data.aws_iam_policy_document.assume_role_policy[0]: Reading...
+module.eks.module.eks.data.aws_iam_policy_document.assume_role_policy[0]: Read complete after 0s [id=2764486067]
+module.eks.module.eks.aws_iam_role.this[0]: Refreshing state... [id=mlflow-cluster-dev-cluster-20250614223359144300000001]
+module.eks.data.aws_kms_alias.existing: Read complete after 1s [id=arn:aws:kms:us-east-1:256995722813:alias/eks/mlflow-cluster-dev]
+module.eks.module.eks.data.aws_iam_session_context.current: Read complete after 1s [id=arn:aws:sts::256995722813:assumed-role/setup-mlflow/aws-go-sdk-1749966112299352205]
+module.eks.aws_kms_alias.this: Refreshing state... [id=alias/eks/mlflow-cluster]
+module.s3.aws_iam_user_policy_attachment.mlflow_s3_policy_attachment: Refreshing state... [id=mlflow-user-dev-20250614234739281800000001]
+module.eks.module.eks.aws_iam_role_policy_attachment.this["AmazonEKSClusterPolicy"]: Refreshing state... [id=mlflow-cluster-dev-cluster-20250614223359144300000001-20250614223359918000000003]
+module.eks.module.eks.aws_iam_role_policy_attachment.this["AmazonEKSVPCResourceController"]: Refreshing state... [id=mlflow-cluster-dev-cluster-20250614223359144300000001-20250614223359917300000002]
+module.eks.module.eks.module.kms.data.aws_iam_policy_document.this[0]: Reading...
+module.eks.module.eks.module.kms.data.aws_iam_policy_document.this[0]: Read complete after 0s [id=2624752190]
+module.eks.module.eks.module.kms.aws_kms_key.this[0]: Refreshing state... [id=f7673df3-dbd4-4465-ad28-8d749cfc3598]
+module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]: Refreshing state... [id=alias/eks/mlflow-cluster-dev]
+module.eks.module.eks.aws_iam_policy.cluster_encryption[0]: Refreshing state... [id=arn:aws:iam::256995722813:policy/mlflow-cluster-dev-cluster-ClusterEncryption20250614223421237400000006]
+module.eks.module.eks.aws_iam_role_policy_attachment.cluster_encryption[0]: Refreshing state... [id=mlflow-cluster-dev-cluster-20250614223359144300000001-20250614223421721900000007]
+module.vpc.module.vpc.aws_route_table.public[0]: Refreshing state... [id=rtb-0b3dc34383268995a]
+module.vpc.module.vpc.aws_default_network_acl.this[0]: Refreshing state... [id=acl-08ebfa5049f83751d]
+module.vpc.module.vpc.aws_default_security_group.this[0]: Refreshing state... [id=sg-08365263e41bd273b]
+module.vpc.module.vpc.aws_internet_gateway.this[0]: Refreshing state... [id=igw-050616779fe2f3250]
+module.vpc.data.aws_subnets.public: Reading...
+module.vpc.module.vpc.aws_subnet.private[2]: Refreshing state... [id=subnet-05f821dc8e60c5067]
+module.vpc.module.vpc.aws_subnet.private[0]: Refreshing state... [id=subnet-08af743dc47074d8b]
+module.vpc.module.vpc.aws_subnet.private[1]: Refreshing state... [id=subnet-0fd2ec238ebbd43b9]
+module.vpc.module.vpc.aws_route_table.private[0]: Refreshing state... [id=rtb-06e6203fa6996ed9f]
+module.rds.aws_security_group.mlflow_rds_sg: Refreshing state... [id=sg-0023c24df12cfdd1c]
+module.vpc.module.vpc.aws_route_table.private[1]: Refreshing state... [id=rtb-0b59b6ed69b880045]
+module.vpc.module.vpc.aws_route_table.private[2]: Refreshing state... [id=rtb-06ec75466d0354af3]
+module.vpc.module.vpc.aws_subnet.public[2]: Refreshing state... [id=subnet-0177633d8090f0d00]
+module.vpc.module.vpc.aws_subnet.public[0]: Refreshing state... [id=subnet-05ae996ac53899096]
+module.vpc.module.vpc.aws_subnet.public[1]: Refreshing state... [id=subnet-0eb6c63c02fadf2a8]
+module.vpc.module.vpc.aws_default_route_table.default[0]: Refreshing state... [id=rtb-07b35550bbbe5be28]
+module.vpc.data.aws_subnets.public: Read complete after 0s [id=us-east-1]
+module.vpc.data.aws_subnets.private: Reading...
+module.eks.module.eks.aws_security_group.node[0]: Refreshing state... [id=sg-0e85d8ec9160e207c]
+module.eks.module.eks.aws_security_group.cluster[0]: Refreshing state... [id=sg-07ce3d7bc6a56f5bf]
+module.vpc.module.vpc.aws_route.public_internet_gateway[0]: Refreshing state... [id=r-rtb-0b3dc34383268995a1080289494]
+module.vpc.module.vpc.aws_route_table_association.private[0]: Refreshing state... [id=rtbassoc-07f628bba4a213fbc]
+module.vpc.module.vpc.aws_route_table_association.private[1]: Refreshing state... [id=rtbassoc-0417e402b2254d1e2]
+module.vpc.module.vpc.aws_route_table_association.private[2]: Refreshing state... [id=rtbassoc-0dacbf873a875ec0e]
+module.vpc.data.aws_subnets.private: Read complete after 0s [id=us-east-1]
+module.rds.aws_db_subnet_group.mlflow: Refreshing state... [id=mlflow-db-subnet-group-dev]
+module.eks.aws_eks_node_group.default_node_group: Refreshing state... [id=mlflow-cluster-dev:default_node_group]
+module.vpc.module.vpc.aws_route_table_association.public[1]: Refreshing state... [id=rtbassoc-06d81b485a83f36ed]
+module.vpc.module.vpc.aws_route_table_association.public[0]: Refreshing state... [id=rtbassoc-0e461c386cd39bd78]
+module.vpc.module.vpc.aws_route_table_association.public[2]: Refreshing state... [id=rtbassoc-0072cb77e82c743a8]
+module.eks.module.eks.aws_security_group_rule.cluster["ingress_nodes_443"]: Refreshing state... [id=sgrule-3993211733]
+module.eks.module.eks.aws_security_group_rule.node["ingress_nodes_ephemeral"]: Refreshing state... [id=sgrule-72784815]
+module.eks.module.eks.aws_security_group_rule.node["ingress_cluster_6443_webhook"]: Refreshing state... [id=sgrule-2805409902]
+module.eks.module.eks.aws_security_group_rule.node["ingress_cluster_8443_webhook"]: Refreshing state... [id=sgrule-3026916431]
+module.eks.module.eks.aws_security_group_rule.node["ingress_self_coredns_tcp"]: Refreshing state... [id=sgrule-2310048897]
+module.eks.module.eks.aws_security_group_rule.node["ingress_cluster_9443_webhook"]: Refreshing state... [id=sgrule-3502909316]
+module.eks.module.eks.aws_security_group_rule.node["ingress_cluster_4443_webhook"]: Refreshing state... [id=sgrule-1853181944]
+module.eks.module.eks.aws_security_group_rule.node["egress_all"]: Refreshing state... [id=sgrule-2921244908]
+module.eks.module.eks.aws_security_group_rule.node["ingress_self_coredns_udp"]: Refreshing state... [id=sgrule-770649966]
+module.eks.module.eks.aws_security_group_rule.node["ingress_cluster_443"]: Refreshing state... [id=sgrule-2931640207]
+module.eks.module.eks.aws_security_group_rule.node["ingress_cluster_kubelet"]: Refreshing state... [id=sgrule-3149283261]
+module.eks.module.eks.aws_eks_cluster.this[0]: Refreshing state... [id=mlflow-cluster-dev]
+module.eks.module.eks.aws_ec2_tag.cluster_primary_security_group["Project"]: Refreshing state... [id=sg-06646a8f499a2ac59,Project]
+module.eks.module.eks.aws_ec2_tag.cluster_primary_security_group["Environment"]: Refreshing state... [id=sg-06646a8f499a2ac59,Environment]
+module.eks.module.eks.time_sleep.this[0]: Refreshing state... [id=2025-06-14T22:43:40Z]
+module.eks.module.eks.data.tls_certificate.this[0]: Reading...
+module.eks.module.eks.data.tls_certificate.this[0]: Read complete after 0s [id=922877a0975ad078a65b8ff11ebc47b8311945c7]
+module.eks.module.eks.aws_iam_openid_connect_provider.oidc_provider[0]: Refreshing state... [id=arn:aws:iam::256995722813:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/6217D882F02639C1D8BAD114096E55C4]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # module.rds.aws_db_instance.mlflow will be created
+  + resource "aws_db_instance" "mlflow" {
+      + address                               = (known after apply)
+      + allocated_storage                     = 20
+      + apply_immediately                     = false
+      + arn                                   = (known after apply)
+      + auto_minor_version_upgrade            = true
+      + availability_zone                     = (known after apply)
+      + backup_retention_period               = (known after apply)
+      + backup_target                         = (known after apply)
+      + backup_window                         = (known after apply)
+      + ca_cert_identifier                    = (known after apply)
+      + character_set_name                    = (known after apply)
+      + copy_tags_to_snapshot                 = false
+      + database_insights_mode                = (known after apply)
+      + db_name                               = "mlflow_db_dev"
+      + db_subnet_group_name                  = "mlflow-db-subnet-group-dev"
+      + dedicated_log_volume                  = false
+      + delete_automated_backups              = true
+      + domain_fqdn                           = (known after apply)
+      + endpoint                              = (known after apply)
+      + engine                                = "postgres"
+      + engine_lifecycle_support              = (known after apply)
+      + engine_version                        = "14.13"
+      + engine_version_actual                 = (known after apply)
+      + hosted_zone_id                        = (known after apply)
+      + id                                    = (known after apply)
+      + identifier                            = "mlflow-db-dev"
+      + identifier_prefix                     = (known after apply)
+      + instance_class                        = "db.t3.micro"
+      + iops                                  = (known after apply)
+      + kms_key_id                            = (known after apply)
+      + latest_restorable_time                = (known after apply)
+      + license_model                         = (known after apply)
+      + listener_endpoint                     = (known after apply)
+      + maintenance_window                    = (known after apply)
+      + master_user_secret                    = (known after apply)
+      + master_user_secret_kms_key_id         = (known after apply)
+      + monitoring_interval                   = 0
+      + monitoring_role_arn                   = (known after apply)
+      + multi_az                              = (known after apply)
+      + nchar_character_set_name              = (known after apply)
+      + network_type                          = (known after apply)
+      + option_group_name                     = (known after apply)
+      + parameter_group_name                  = (known after apply)
+      + password                              = (sensitive value)
+      + password_wo                           = (write-only attribute)
+      + performance_insights_enabled          = false
+      + performance_insights_kms_key_id       = (known after apply)
+      + performance_insights_retention_period = (known after apply)
+      + port                                  = (known after apply)
+      + publicly_accessible                   = true
+      + replica_mode                          = (known after apply)
+      + replicas                              = (known after apply)
+      + resource_id                           = (known after apply)
+      + skip_final_snapshot                   = true
+      + snapshot_identifier                   = (known after apply)
+      + status                                = (known after apply)
+      + storage_throughput                    = (known after apply)
+      + storage_type                          = (known after apply)
+      + tags                                  = {
+          + "Environment" = "dev"
+          + "Name"        = "mlflow-db"
+        }
+      + tags_all                              = {
+          + "Environment" = "dev"
+          + "Name"        = "mlflow-db"
+        }
+      + timezone                              = (known after apply)
+      + username                              = "mlflowadmin"
+      + vpc_security_group_ids                = [
+          + "sg-0023c24df12cfdd1c",
+        ]
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + mlflow_db_endpoint = (known after apply)
+  ~ mlflow_db_name     = "mlflow-db-dev" -> "mlflow_db_dev"
+
+─────────────────────────────────────────────────────────────────────────────
+
+Note: You didn't use the -out option to save this plan, so Terraform can't
+guarantee to take exactly these actions if you run "terraform apply" now.
