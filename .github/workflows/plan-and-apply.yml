@@ -1,0 +1,124 @@
+name: Terraform Plan & Apply (Legacy)
+
+# ⚠️ DEPRECATED: This workflow is kept for backward compatibility
+# 👉 Use 'infrastructure-deploy.yml' for new deployments
+# 📚 See .github/workflows/README.md for migration guide
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_existing_resources:
+        description: 'Use existing resources (true) or create new (false)'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: dev
+      AWS_REGION: us-east-1
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create Environment-Specific tfvars
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          
+          if [ "${{ github.event.inputs.use_existing_resources }}" == "true" ]; then
+            # Use existing tfvars for existing resources
+            cp terraform.tfvars current.tfvars
+          else
+            # Create tfvars for clean setup
+            cat > current.tfvars << EOF
+          environment        = "${{ env.ENVIRONMENT }}"
+          region             = "${{ env.AWS_REGION }}"
+          db_password        = "${{ secrets.MLFLOW_DB_PASSWORD }}"
+          bucket_name        = "mlflow-backend-${{ env.ENVIRONMENT }}"
+          mlflow_user        = "mlflow-user-${{ env.ENVIRONMENT }}"
+          existing_resources = false
+          account_id         = "${ACCOUNT_ID}"
+          github_actions_role_arn = "${{ secrets.AWS_ROLE_TO_ASSUME }}"
+          EOF
+          fi
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Plan (initial attempt)
+        id: plan
+        continue-on-error: true
+        shell: bash
+        run: |
+            set +e
+            set -o pipefail
+            RAW_LOG="raw_plan_output.txt"
+
+            terraform plan -input=false \
+            -var-file="current.tfvars" \
+            -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
+            -no-color \
+            -out=tfplan \
+            > $RAW_LOG 2>&1
+
+            PLAN_EXIT_CODE=$?
+
+            # Extract lock ID
+            LOCK_ID=$(awk '/Lock Info:/ {found=1} found && /ID:/ {print $2; exit}' $RAW_LOG)
+
+            if [[ -n "$LOCK_ID" ]]; then
+                echo "Terraform state lock detected: $LOCK_ID"
+                echo "lock_id=$LOCK_ID" >> $GITHUB_OUTPUT
+            else
+                echo "lock_id=" >> $GITHUB_OUTPUT
+            fi
+
+            # Export success status
+            if [[ $PLAN_EXIT_CODE -eq 0 ]]; then
+                echo "plan_success=true" >> $GITHUB_OUTPUT
+            else
+                echo "plan_success=false" >> $GITHUB_OUTPUT
+            fi
+
+      - name: Terraform Force Unlock (if needed)
+        if: ${{ steps.plan.outputs.lock_id != '' }}
+        run: terraform force-unlock -force ${{ steps.plan.outputs.lock_id }}
+
+      - name: Terraform Plan (retry after unlock)
+        id: plan_retry
+        if: ${{ steps.plan.outputs.plan_success == 'false' }}
+        run: |
+          terraform plan -input=false \
+            -var-file="current.tfvars" \
+            -var "cluster_name=mlflow-cluster-${{ env.ENVIRONMENT }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        if: |
+          (steps.plan.outputs.plan_success == 'true' && steps.plan.outcome == 'success') ||
+          (steps.plan.outputs.plan_success == 'false' && steps.plan_retry.outcome == 'success')
+        run: terraform apply -auto-approve tfplan
+
