@@ -141,6 +141,12 @@ jobs:
             cp terraform.tfvars ${{ env.ENVIRONMENT }}.tfvars
           fi
 
+      - name: Clean Terraform Configuration
+        run: |
+          # Remove any dynamically created backend.tf files to prevent conflicts
+          rm -f backend.tf
+          echo "Cleaned up any conflicting backend configuration files"
+
       - name: Terraform Init
         run: terraform init -input=false
 
