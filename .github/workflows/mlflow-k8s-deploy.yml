@@ -1,0 +1,421 @@
+name: MLflow Kubernetes Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy MLflow (dev/staging/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+        - deploy
+        - redeploy
+        - destroy
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy-mlflow:
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      ACTION: ${{ github.event.inputs.action }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.27.0'
+
+      - name: Configure kubectl for EKS
+        run: |
+          CLUSTER_NAME="mlflow-cluster-${{ env.ENVIRONMENT }}"
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$CLUSTER_NAME"
+          
+          # Verify cluster access
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Get Infrastructure Information
+        id: infra-info
+        run: |
+          # Get account ID
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${ACCOUNT_ID}" >> $GITHUB_OUTPUT
+          
+          # Get RDS endpoint from terraform state or AWS CLI
+          RDS_ENDPOINT=$(aws rds describe-db-instances \
+            --db-instance-identifier "mlflow-db-${{ env.ENVIRONMENT }}" \
+            --query 'DBInstances[0].Endpoint.Address' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -z "$RDS_ENDPOINT" ]; then
+            echo "❌ RDS instance not found. Make sure infrastructure is deployed first."
+            exit 1
+          fi
+          
+          echo "rds_endpoint=${RDS_ENDPOINT}" >> $GITHUB_OUTPUT
+          
+          # Get S3 bucket name
+          S3_BUCKET="mlflow-backend-${{ env.ENVIRONMENT }}"
+          echo "s3_bucket=${S3_BUCKET}" >> $GITHUB_OUTPUT
+          
+          # Get EKS OIDC issuer
+          OIDC_ISSUER=$(aws eks describe-cluster \
+            --name "mlflow-cluster-${{ env.ENVIRONMENT }}" \
+            --query 'cluster.identity.oidc.issuer' \
+            --output text | sed 's/https:\/\///')
+          echo "oidc_issuer=${OIDC_ISSUER}" >> $GITHUB_OUTPUT
+
+      - name: Create MLflow IAM Role for Service Account
+        if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
+        run: |
+          ACCOUNT_ID="${{ steps.infra-info.outputs.account_id }}"
+          OIDC_ISSUER="${{ steps.infra-info.outputs.oidc_issuer }}"
+          ROLE_NAME="mlflow-service-account-role-${{ env.ENVIRONMENT }}"
+          
+          # Create trust policy
+          cat > trust-policy.json << EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": {
+                  "Federated": "arn:aws:iam::${ACCOUNT_ID}:oidc-provider/${OIDC_ISSUER}"
+                },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                "StringEquals": {
+                    "${OIDC_ISSUER}:sub": "system:serviceaccount:mlflow:mlflow",
+                    "${OIDC_ISSUER}:aud": "sts.amazonaws.com"
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+          
+          # Create IAM role (ignore if exists)
+          aws iam create-role \
+            --role-name "${ROLE_NAME}" \
+            --assume-role-policy-document file://trust-policy.json \
+            --description "IAM role for MLflow service account in ${{ env.ENVIRONMENT }}" \
+            2>/dev/null || echo "Role already exists"
+          
+          # Create S3 access policy
+          cat > s3-policy.json << EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": [
+                  "s3:GetObject",
+                  "s3:PutObject",
+                  "s3:DeleteObject",
+                  "s3:ListBucket"
+                ],
+                "Resource": [
+                  "arn:aws:s3:::${{ steps.infra-info.outputs.s3_bucket }}",
+                  "arn:aws:s3:::${{ steps.infra-info.outputs.s3_bucket }}/*"
+                ]
+              }
+            ]
+          }
+          EOF
+          
+          # Create and attach policy
+          POLICY_NAME="mlflow-s3-access-${{ env.ENVIRONMENT }}"
+          aws iam create-policy \
+            --policy-name "${POLICY_NAME}" \
+            --policy-document file://s3-policy.json \
+            --description "S3 access policy for MLflow in ${{ env.ENVIRONMENT }}" \
+            2>/dev/null || echo "Policy already exists"
+          
+          aws iam attach-role-policy \
+            --role-name "${ROLE_NAME}" \
+            --policy-arn "arn:aws:iam::${ACCOUNT_ID}:policy/${POLICY_NAME}"
+          
+          echo "Created IAM role: arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+
+      - name: Destroy MLflow Resources
+        if: ${{ env.ACTION == 'destroy' }}
+        run: |
+          echo "🗑️ Destroying MLflow Kubernetes resources..."
+          
+          # Delete MLflow namespace and all resources
+          kubectl delete namespace mlflow --ignore-not-found=true --timeout=300s
+          
+          # Delete any remaining LoadBalancer services
+          kubectl delete svc --all-namespaces --field-selector spec.type=LoadBalancer --timeout=300s
+          
+          echo "✅ MLflow resources destroyed"
+
+      - name: Prepare Kubernetes Manifests
+        if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
+        run: |
+          ACCOUNT_ID="${{ steps.infra-info.outputs.account_id }}"
+          RDS_ENDPOINT="${{ steps.infra-info.outputs.rds_endpoint }}"
+          S3_BUCKET="${{ steps.infra-info.outputs.s3_bucket }}"
+          DB_NAME="mlflow_db_${{ env.ENVIRONMENT }}"
+          
+          # Create working directory
+          mkdir -p k8s-manifests
+          
+          # Process existing manifests with environment-specific values
+          sed -e "s/mlflow-backend-dev/${S3_BUCKET}/g" \
+              -e "s/mlflow-db-dev.cs7esuga69ux.us-east-1.rds.amazonaws.com/${RDS_ENDPOINT}/g" \
+              -e "s/mlflow_db_dev/${DB_NAME}/g" \
+              infra/k8s/mlflow/*.yaml > k8s-manifests/combined.yaml
+          
+          # Create MLflow deployment with proper image and configuration
+          cat > k8s-manifests/mlflow-deployment.yaml << 'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: mlflow
+            namespace: mlflow
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: mlflow
+                component: tracking-server
+            template:
+              metadata:
+                labels:
+                  app: mlflow
+                  component: tracking-server
+              spec:
+                serviceAccountName: mlflow
+                containers:
+                - name: mlflow
+                  image: python:3.9-slim
+                  ports:
+                  - containerPort: 5000
+                    name: http
+                  env:
+                  - name: MLFLOW_TRACKING_URI
+                    value: "http://0.0.0.0:5000"
+                  - name: BACKEND_STORE_URI
+                    valueFrom:
+                      secretKeyRef:
+                        name: mlflow-secrets
+                        key: backend_store_uri
+                  - name: ARTIFACT_ROOT
+                    valueFrom:
+                      secretKeyRef:
+                        name: mlflow-secrets
+                        key: artifact_root
+                  - name: AWS_REGION
+                    value: "${{ env.AWS_REGION }}"
+                  command:
+                  - /bin/bash
+                  - -c
+                  - |
+                    pip install --no-cache-dir mlflow==2.8.1 psycopg2-binary boto3
+                    mlflow server \
+                      --backend-store-uri $BACKEND_STORE_URI \
+                      --default-artifact-root $ARTIFACT_ROOT \
+                      --host 0.0.0.0 \
+                      --port 5000 \
+                      --gunicorn-opts "--timeout=120 --workers=2"
+                  livenessProbe:
+                    httpGet:
+                      path: /health
+                      port: 5000
+                    initialDelaySeconds: 180
+                    periodSeconds: 30
+                    timeoutSeconds: 10
+                    failureThreshold: 5
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: 5000
+                    initialDelaySeconds: 120
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 3
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "250m"
+                    limits:
+                      memory: "1Gi"
+                      cpu: "500m"
+          EOF
+          
+          # Create LoadBalancer service
+          cat > k8s-manifests/mlflow-loadbalancer.yaml << 'EOF'
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mlflow-ingress
+            namespace: mlflow
+            labels:
+              app: mlflow
+              service: ingress
+          spec:
+            type: LoadBalancer
+            selector:
+              app: mlflow
+              component: tracking-server
+            ports:
+            - name: http
+              port: 80
+              targetPort: 5000
+              protocol: TCP
+            externalTrafficPolicy: Cluster
+            sessionAffinity: None
+          EOF
+
+      - name: Update Service Account with IAM Role
+        if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
+        run: |
+          ACCOUNT_ID="${{ steps.infra-info.outputs.account_id }}"
+          ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/mlflow-service-account-role-${{ env.ENVIRONMENT }}"
+          
+          # Check if namespace exists, create if not
+          kubectl create namespace mlflow --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Create or update service account with IAM role annotation
+          kubectl create serviceaccount mlflow -n mlflow --dry-run=client -o yaml | \
+          kubectl annotate --local -f - eks.amazonaws.com/role-arn="${ROLE_ARN}" --overwrite -o yaml | \
+          kubectl apply -f -
+
+      - name: Create MLflow Secrets
+        if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
+        run: |
+          RDS_ENDPOINT="${{ steps.infra-info.outputs.rds_endpoint }}"
+          S3_BUCKET="${{ steps.infra-info.outputs.s3_bucket }}"
+          DB_NAME="mlflow_db_${{ env.ENVIRONMENT }}"
+          
+          # Create secrets
+          kubectl create secret generic mlflow-secrets -n mlflow \
+            --from-literal=backend_store_uri="postgresql://mlflowadmin:${{ secrets.MLFLOW_DB_PASSWORD }}@${RDS_ENDPOINT}:5432/${DB_NAME}" \
+            --from-literal=artifact_root="s3://${S3_BUCKET}/mlflow-artifacts" \
+            --from-literal=aws_region="${{ env.AWS_REGION }}" \
+            --from-literal=db_host="${RDS_ENDPOINT}" \
+            --from-literal=db_name="${DB_NAME}" \
+            --from-literal=db_password="${{ secrets.MLFLOW_DB_PASSWORD }}" \
+            --from-literal=db_port="5432" \
+            --from-literal=s3_bucket="${S3_BUCKET}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy/Redeploy MLflow
+        if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
+        run: |
+          if [ "${{ env.ACTION }}" == "redeploy" ]; then
+            echo "🔄 Redeploying MLflow..."
+            kubectl delete deployment mlflow -n mlflow --ignore-not-found=true
+            kubectl delete service mlflow-ingress -n mlflow --ignore-not-found=true
+            sleep 10
+          fi
+          
+          echo "🚀 Deploying MLflow..."
+          
+          # Apply manifests
+          kubectl apply -f k8s-manifests/mlflow-deployment.yaml
+          kubectl apply -f k8s-manifests/mlflow-loadbalancer.yaml
+          
+          # Wait for deployment
+          kubectl wait --for=condition=available --timeout=600s deployment/mlflow -n mlflow
+          
+          echo "✅ MLflow deployment completed"
+
+      - name: Get MLflow Access Information
+        if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
+        run: |
+          echo "📋 MLflow Deployment Information:"
+          echo "================================"
+          
+          # Get pod status
+          kubectl get pods -n mlflow
+          
+          # Get service information
+          kubectl get svc -n mlflow
+          
+          # Wait for LoadBalancer to get external IP
+          echo "⏳ Waiting for LoadBalancer external IP..."
+          for i in {1..60}; do
+            EXTERNAL_IP=$(kubectl get svc mlflow-ingress -n mlflow -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+            if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
+              echo "✅ MLflow UI available at: http://$EXTERNAL_IP"
+              echo "::notice::MLflow UI available at: http://$EXTERNAL_IP"
+              break
+            fi
+            echo "  Attempt $i/60: Waiting for external IP..."
+            sleep 10
+          done
+          
+          if [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" == "null" ]; then
+            echo "⚠️  LoadBalancer external IP not ready yet. Check later with:"
+            echo "   kubectl get svc mlflow-ingress -n mlflow"
+          fi
+
+      - name: Test MLflow Health
+        if: ${{ env.ACTION == 'deploy' || env.ACTION == 'redeploy' }}
+        continue-on-error: true
+        run: |
+          echo "🏥 Testing MLflow health..."
+          
+          # Port-forward to test internally
+          kubectl port-forward svc/mlflow 8080:5000 -n mlflow &
+          PF_PID=$!
+          
+          sleep 10
+          
+          # Test health endpoint
+          if curl -f http://localhost:8080/health; then
+            echo "✅ MLflow health check passed"
+          else
+            echo "❌ MLflow health check failed"
+          fi
+          
+          # Clean up port-forward
+          kill $PF_PID 2>/dev/null || true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "🎯 MLflow Kubernetes Deployment Summary"
+          echo "======================================="
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+          echo "Action: ${{ env.ACTION }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo ""
+          
+          if [ "${{ env.ACTION }}" == "destroy" ]; then
+            echo "✅ MLflow resources have been destroyed"
+          else
+            echo "✅ MLflow deployment completed"
+            echo "📍 Next steps:"
+            echo "   1. Check LoadBalancer external IP: kubectl get svc mlflow-ingress -n mlflow"
+            echo "   2. Access MLflow UI at the external IP"
+            echo "   3. Verify S3 artifact storage is working"
+          fi

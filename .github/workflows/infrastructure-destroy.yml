@@ -1,0 +1,219 @@
+name: Infrastructure Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy (dev/staging/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      confirm_destroy:
+        description: "Type 'destroy' to confirm complete teardown"
+        required: true
+      clean_state_backend:
+        description: 'Also destroy state backend (S3 bucket and DynamoDB)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  cleanup-kubernetes:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.confirm_destroy == 'destroy' }}
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.27.0'
+
+      - name: Configure kubectl for EKS
+        continue-on-error: true
+        run: |
+          CLUSTER_NAME="mlflow-cluster-${{ env.ENVIRONMENT }}"
+          if aws eks describe-cluster --name "$CLUSTER_NAME" --region ${{ env.AWS_REGION }} >/dev/null 2>&1; then
+            aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$CLUSTER_NAME"
+            
+            # Delete MLflow namespace and all resources
+            kubectl delete namespace mlflow --ignore-not-found=true --timeout=300s
+            
+            # Delete any LoadBalancer services in default namespace
+            kubectl delete svc --all-namespaces --field-selector spec.type=LoadBalancer --timeout=300s
+            
+            # Wait for cleanup
+            sleep 30
+          else
+            echo "EKS cluster not found or not accessible, skipping Kubernetes cleanup"
+          fi
+
+  terraform-destroy:
+    runs-on: ubuntu-latest
+    needs: [cleanup-kubernetes]
+    if: always() && github.event.inputs.confirm_destroy == 'destroy' && (needs.cleanup-kubernetes.result == 'success' || needs.cleanup-kubernetes.result == 'skipped')
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      TF_IN_AUTOMATION: true
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform Backend Configuration
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          STATE_BUCKET="terraform-state-mlflow-${ACCOUNT_ID}-${{ env.ENVIRONMENT }}"
+          DYNAMODB_TABLE="terraform-locks-mlflow-${{ env.ENVIRONMENT }}"
+          
+          # Create backend configuration
+          cat > backend.tf << EOF
+          terraform {
+            backend "s3" {
+              bucket         = "${STATE_BUCKET}"
+              key            = "mlflow/terraform.tfstate"
+              region         = "${{ env.AWS_REGION }}"
+              encrypt        = true
+              dynamodb_table = "${DYNAMODB_TABLE}"
+            }
+          }
+          EOF
+
+      - name: Create Environment-Specific tfvars
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          
+          # Try to detect if this is existing resources or clean setup
+          if [ -f terraform.tfvars ] && grep -q "existing_resources.*true" terraform.tfvars; then
+            cp terraform.tfvars ${{ env.ENVIRONMENT }}.tfvars
+          else
+            # Create tfvars for destruction
+            cat > ${{ env.ENVIRONMENT }}.tfvars << EOF
+          environment        = "${{ env.ENVIRONMENT }}"
+          region             = "${{ env.AWS_REGION }}"
+          db_password        = "${{ secrets.MLFLOW_DB_PASSWORD }}"
+          bucket_name        = "mlflow-backend-${{ env.ENVIRONMENT }}"
+          mlflow_user        = "mlflow-user-${{ env.ENVIRONMENT }}"
+          existing_resources = false
+          account_id         = "${ACCOUNT_ID}"
+          github_actions_role_arn = "${{ secrets.AWS_ROLE_TO_ASSUME }}"
+          EOF
+          fi
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Destroy
+        id: destroy
+        continue-on-error: true
+        run: |
+          set +e
+          set -o pipefail
+          
+          terraform destroy -auto-approve \
+            -var-file="${{ env.ENVIRONMENT }}.tfvars" \
+            -var "cluster_name=mlflow-cluster" \
+            2>&1 | tee destroy_output.txt
+          
+          DESTROY_EXIT_CODE=$?
+          
+          # Check for state lock
+          if grep -q "Error acquiring the state lock" destroy_output.txt; then
+            LOCK_ID=$(grep -oP 'ID:\s+\K[a-f0-9-]+' destroy_output.txt | head -1)
+            echo "lock_id=${LOCK_ID}" >> $GITHUB_OUTPUT
+          else
+            echo "lock_id=" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "destroy_success=$([ $DESTROY_EXIT_CODE -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          exit $DESTROY_EXIT_CODE
+
+      - name: Terraform Force Unlock (if needed)
+        if: ${{ steps.destroy.outputs.lock_id != '' }}
+        run: terraform force-unlock -force ${{ steps.destroy.outputs.lock_id }}
+
+      - name: Terraform Destroy (retry after unlock)
+        if: ${{ steps.destroy.outputs.destroy_success == 'false' && steps.destroy.outputs.lock_id != '' }}
+        run: |
+          terraform destroy -auto-approve \
+            -var-file="${{ env.ENVIRONMENT }}.tfvars" \
+            -var "cluster_name=mlflow-cluster"
+
+      - name: Upload Destroy Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: destroy-log-${{ env.ENVIRONMENT }}
+          path: infra/terraform/destroy_output.txt
+
+  cleanup-state-backend:
+    runs-on: ubuntu-latest
+    needs: [terraform-destroy]
+    if: always() && github.event.inputs.clean_state_backend == 'true' && github.event.inputs.confirm_destroy == 'destroy' && needs.terraform-destroy.result == 'success'
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cleanup State Backend
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          STATE_BUCKET="terraform-state-mlflow-${ACCOUNT_ID}-${{ env.ENVIRONMENT }}"
+          DYNAMODB_TABLE="terraform-locks-mlflow-${{ env.ENVIRONMENT }}"
+          
+          echo "Cleaning up Terraform state backend..."
+          
+          # Empty and delete S3 bucket
+          if aws s3 ls "s3://${STATE_BUCKET}" 2>/dev/null; then
+            echo "Emptying S3 bucket: ${STATE_BUCKET}"
+            aws s3 rm "s3://${STATE_BUCKET}" --recursive
+            echo "Deleting S3 bucket: ${STATE_BUCKET}"
+            aws s3 rb "s3://${STATE_BUCKET}"
+          fi
+          
+          # Delete DynamoDB table
+          if aws dynamodb describe-table --table-name "${DYNAMODB_TABLE}" 2>/dev/null; then
+            echo "Deleting DynamoDB table: ${DYNAMODB_TABLE}"
+            aws dynamodb delete-table --table-name "${DYNAMODB_TABLE}"
+          fi
+          
+          echo "State backend cleanup completed."

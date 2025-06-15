@@ -8,6 +8,11 @@ module "eks" {
 
   create_cloudwatch_log_group = var.create_cloudwatch_log_group
 
+  # Enable public access for personal project
+  cluster_endpoint_public_access  = true
+  cluster_endpoint_private_access = true
+  cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]
+
   tags = {
     Environment = var.environment
     Project     = "mlflow"
@@ -69,6 +74,22 @@ resource "aws_iam_role" "eks_node_group" {
       },
     ]
   })
+}
+
+# Required policy attachments for EKS worker nodes
+resource "aws_iam_role_policy_attachment" "eks_worker_node_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  role       = aws_iam_role.eks_node_group.name
+}
+
+resource "aws_iam_role_policy_attachment" "eks_cni_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.eks_node_group.name
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_read_only" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.eks_node_group.name
 }
 
 variable "public_subnet_ids" {

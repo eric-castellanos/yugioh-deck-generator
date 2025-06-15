@@ -41,9 +41,24 @@ module "vpc" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
+  # Enable auto-assign public IP for public subnets (required for EKS nodes)
+  map_public_ip_on_launch = true
+
+  # EKS requires specific tags on subnets
+  public_subnet_tags = {
+    "kubernetes.io/role/elb" = "1"
+    "kubernetes.io/cluster/mlflow-cluster-${var.environment}" = "shared"
+  }
+
+  private_subnet_tags = {
+    "kubernetes.io/role/internal-elb" = "1"
+    "kubernetes.io/cluster/mlflow-cluster-${var.environment}" = "shared"
+  }
+
   tags = {
     Environment = var.environment
     Project     = "mlflow"
+    "kubernetes.io/cluster/mlflow-cluster-${var.environment}" = "shared"
   }
 }
 

@@ -1,0 +1,214 @@
+name: Infrastructure Plan & Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy (dev/staging/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      clean_setup:
+        description: 'Clean setup (no existing resources)'
+        required: true
+        default: true
+        type: boolean
+      auto_approve:
+        description: 'Auto-approve terraform apply'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  setup-state-backend:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.clean_setup == 'true' }}
+    outputs:
+      state-bucket: ${{ steps.create-backend.outputs.state-bucket }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Create Terraform State Backend
+        id: create-backend
+        run: |
+          # Create unique bucket name
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          STATE_BUCKET="terraform-state-mlflow-${ACCOUNT_ID}-${{ github.event.inputs.environment }}"
+          DYNAMODB_TABLE="terraform-locks-mlflow-${{ github.event.inputs.environment }}"
+          
+          echo "state-bucket=${STATE_BUCKET}" >> $GITHUB_OUTPUT
+          
+          # Create S3 bucket for state
+          if ! aws s3 ls "s3://${STATE_BUCKET}" 2>/dev/null; then
+            echo "Creating S3 bucket: ${STATE_BUCKET}"
+            aws s3 mb "s3://${STATE_BUCKET}" --region ${{ env.AWS_REGION }}
+            aws s3api put-bucket-versioning \
+              --bucket "${STATE_BUCKET}" \
+              --versioning-configuration Status=Enabled
+            aws s3api put-bucket-encryption \
+              --bucket "${STATE_BUCKET}" \
+              --server-side-encryption-configuration '{
+                "Rules": [{
+                  "ApplyServerSideEncryptionByDefault": {
+                    "SSEAlgorithm": "AES256"
+                  }
+                }]
+              }'
+          fi
+          
+          # Create DynamoDB table for locking
+          if ! aws dynamodb describe-table --table-name "${DYNAMODB_TABLE}" 2>/dev/null; then
+            echo "Creating DynamoDB table: ${DYNAMODB_TABLE}"
+            aws dynamodb create-table \
+              --table-name "${DYNAMODB_TABLE}" \
+              --attribute-definitions AttributeName=LockID,AttributeType=S \
+              --key-schema AttributeName=LockID,KeyType=HASH \
+              --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+            
+            # Wait for table to be active
+            aws dynamodb wait table-exists --table-name "${DYNAMODB_TABLE}"
+          fi
+
+  terraform:
+    runs-on: ubuntu-latest
+    needs: [setup-state-backend]
+    if: always() && (needs.setup-state-backend.result == 'success' || needs.setup-state-backend.result == 'skipped')
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      CLEAN_SETUP: ${{ github.event.inputs.clean_setup }}
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform Backend Configuration
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          STATE_BUCKET="terraform-state-mlflow-${ACCOUNT_ID}-${{ env.ENVIRONMENT }}"
+          DYNAMODB_TABLE="terraform-locks-mlflow-${{ env.ENVIRONMENT }}"
+          
+          # Create backend configuration
+          cat > backend.tf << EOF
+          terraform {
+            backend "s3" {
+              bucket         = "${STATE_BUCKET}"
+              key            = "mlflow/terraform.tfstate"
+              region         = "${{ env.AWS_REGION }}"
+              encrypt        = true
+              dynamodb_table = "${DYNAMODB_TABLE}"
+            }
+          }
+          EOF
+
+      - name: Create Environment-Specific tfvars
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          
+          # Create tfvars for clean setup or existing resources
+          if [ "${{ env.CLEAN_SETUP }}" == "true" ]; then
+            cat > ${{ env.ENVIRONMENT }}.tfvars << EOF
+          environment        = "${{ env.ENVIRONMENT }}"
+          region             = "${{ env.AWS_REGION }}"
+          db_password        = "${{ secrets.MLFLOW_DB_PASSWORD }}"
+          bucket_name        = "mlflow-backend-${{ env.ENVIRONMENT }}"
+          mlflow_user        = "mlflow-user-${{ env.ENVIRONMENT }}"
+          existing_resources = false
+          account_id         = "${ACCOUNT_ID}"
+          github_actions_role_arn = "${{ secrets.AWS_ROLE_TO_ASSUME }}"
+          EOF
+          else
+            # Use existing tfvars for existing resources
+            cp terraform.tfvars ${{ env.ENVIRONMENT }}.tfvars
+          fi
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Plan
+        id: plan
+        continue-on-error: true
+        run: |
+          set +e
+          set -o pipefail
+          
+          terraform plan -input=false \
+            -var-file="${{ env.ENVIRONMENT }}.tfvars" \
+            -var "cluster_name=mlflow-cluster" \
+            -no-color \
+            -out=tfplan \
+            2>&1 | tee plan_output.txt
+          
+          PLAN_EXIT_CODE=$?
+          
+          # Check for state lock
+          if grep -q "Error acquiring the state lock" plan_output.txt; then
+            LOCK_ID=$(grep -oP 'ID:\s+\K[a-f0-9-]+' plan_output.txt | head -1)
+            echo "lock_id=${LOCK_ID}" >> $GITHUB_OUTPUT
+          else
+            echo "lock_id=" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "plan_success=$([ $PLAN_EXIT_CODE -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          exit $PLAN_EXIT_CODE
+
+      - name: Terraform Force Unlock (if needed)
+        if: ${{ steps.plan.outputs.lock_id != '' }}
+        run: terraform force-unlock -force ${{ steps.plan.outputs.lock_id }}
+
+      - name: Terraform Plan (retry after unlock)
+        if: ${{ steps.plan.outputs.plan_success == 'false' && steps.plan.outputs.lock_id != '' }}
+        run: |
+          terraform plan -input=false \
+            -var-file="${{ env.ENVIRONMENT }}.tfvars" \
+            -var "cluster_name=mlflow-cluster" \
+            -out=tfplan
+
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ env.ENVIRONMENT }}
+          path: |
+            infra/terraform/tfplan
+            infra/terraform/plan_output.txt
+            infra/terraform/${{ env.ENVIRONMENT }}.tfvars
+
+      - name: Terraform Apply
+        if: ${{ github.event.inputs.auto_approve == 'true' }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Wait for Manual Approval
+        if: ${{ github.event.inputs.auto_approve == 'false' }}
+        run: |
+          echo "::notice::Terraform plan completed. Manual approval required for apply."
+          echo "::notice::Download the plan artifact and run 'terraform apply tfplan' manually."
