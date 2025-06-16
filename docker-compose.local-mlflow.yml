@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  mlflow-local:
+    image: python:3.9-slim
+    container_name: mlflow-local
+    ports:
+      - "5000:5000"
+    environment:
+      # Connect to your existing AWS RDS database 
+      - BACKEND_STORE_URI=postgresql://mlflowadmin:${MLFLOW_DB_PASSWORD}@${RDS_ENDPOINT}/mlflow_db_dev
+      # Use your existing S3 bucket for artifacts
+      - ARTIFACT_ROOT=s3://${S3_BUCKET}/mlflow-artifacts
+      - AWS_REGION=us-east-1
+      - AWS_PROFILE=${AWS_PROFILE}
+    volumes:
+      - .:/workspace
+      - ~/.aws:/root/.aws:ro  # Mount AWS credentials
+    working_dir: /workspace
+    command: >
+      bash -c "
+        pip install --no-cache-dir mlflow==2.8.1 psycopg2-binary boto3 awscli &&
+        echo 'Starting MLflow server connected to AWS resources...' &&
+        mlflow server \
+          --backend-store-uri $$BACKEND_STORE_URI \
+          --default-artifact-root $$ARTIFACT_ROOT \
+          --host 0.0.0.0 \
+          --port 5000 \
+          --gunicorn-opts '--timeout=120 --workers=2'
+      "
+    # No networks section when using host networking
+
+  # Optional: Local PostgreSQL for offline development
+  mlflow-local-db:
+    image: postgres:13
+    container_name: mlflow-local-db
+    profiles:
+      - offline  # Only start with --profile offline
+    environment:
+      - POSTGRES_DB=mlflow_local
+      - POSTGRES_USER=mlflowadmin
+      - POSTGRES_PASSWORD=$MLFLOW_DB_PASSWORD
+    ports:
+      - "5432:5432"
+    volumes:
+      - mlflow_local_db:/var/lib/postgresql/data
+    networks:
+      - mlflow-network
+
+  mlflow-offline:
+    image: python:3.9-slim
+    container_name: mlflow-offline
+    profiles:
+      - offline  # Only start with --profile offline
+    ports:
+      - "5001:5000"
+    environment:
+      - BACKEND_STORE_URI=postgresql://mlflow:mlflow123@mlflow-local-db:5432/mlflow_local
+      - ARTIFACT_ROOT=/mlflow/artifacts
+    volumes:
+      - .:/workspace
+      - mlflow_artifacts:/mlflow/artifacts
+    working_dir: /workspace
+    depends_on:
+      - mlflow-local-db
+    command: >
+      bash -c "
+        pip install --no-cache-dir mlflow==2.8.1 psycopg2-binary &&
+        echo 'Starting local MLflow server...' &&
+        mlflow server \
+          --backend-store-uri $$BACKEND_STORE_URI \
+          --default-artifact-root $$ARTIFACT_ROOT \
+          --host 0.0.0.0 \
+          --port 5000
+      "
+    networks:
+      - mlflow-network
+
+volumes:
+  mlflow_local_db:
+  mlflow_artifacts:
+
+networks:
+  mlflow-network:
+    driver: bridge
