@@ -132,6 +132,49 @@ jobs:
       - name: Terraform Init
         run: terraform init -input=false
 
+      - name: Pre-Destroy S3 Cleanup
+        continue-on-error: true
+        run: |
+          echo "🧹 Cleaning S3 buckets to prevent deletion errors..."
+          
+          # Clean MLflow backend bucket
+          S3_BUCKET="mlflow-backend-${{ env.ENVIRONMENT }}"
+          if aws s3 ls "s3://${S3_BUCKET}" 2>/dev/null; then
+            echo "Emptying S3 bucket: ${S3_BUCKET}"
+            aws s3 rm "s3://${S3_BUCKET}" --recursive
+            # Remove any versioned objects and delete markers
+            aws s3api list-object-versions --bucket "${S3_BUCKET}" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}, DeleteMarkers: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json | \
+            jq -c '.Objects // [], .DeleteMarkers // []' | \
+            while read -r objects; do
+              if [ "$objects" != "null" ] && [ "$objects" != "[]" ]; then
+                echo "$objects" | jq -c '.[]' | while read -r obj; do
+                  key=$(echo "$obj" | jq -r '.Key')
+                  version=$(echo "$obj" | jq -r '.VersionId')
+                  aws s3api delete-object --bucket "${S3_BUCKET}" --key "$key" --version-id "$version" || true
+                done
+              fi
+            done
+          fi
+
+      - name: Pre-Destroy IAM Cleanup  
+        continue-on-error: true
+        run: |
+          echo "🧹 Cleaning up IAM resources that might block destruction..."
+          
+          # Detach and delete MLflow S3 access policy
+          POLICY_ARN="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):policy/mlflow-s3-access-${{ env.ENVIRONMENT }}"
+          
+          # Get all roles that have this policy attached
+          aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyRoles[].RoleName' --output text 2>/dev/null | tr '\t' '\n' | while read -r role; do
+            if [ -n "$role" ]; then
+              echo "Detaching policy from role: $role"
+              aws iam detach-role-policy --role-name "$role" --policy-arn "$POLICY_ARN" || true
+            fi
+          done
+          
+          # Delete the policy
+          aws iam delete-policy --policy-arn "$POLICY_ARN" || true
+
       - name: Terraform Destroy
         id: destroy
         continue-on-error: true

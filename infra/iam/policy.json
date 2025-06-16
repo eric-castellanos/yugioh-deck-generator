@@ -4,14 +4,16 @@
     {
       "Effect": "Allow",
       "Action": [
-        "kms:EnableKeyRotation",
-        "kms:CreateAlias",
-        "kms:DescribeKey",
-        "eks:TagResource",
-        "eks:CreateCluster",
-        "eks:CreateNodegroup",
-        "rds:AddTagsToResource",
-        "rds:CreateDBSubnetGroup"
+        "s3:*",
+        "dynamodb:*",
+        "eks:*",
+        "ec2:*",
+        "iam:*",
+        "rds:*",
+        "kms:*",
+        "logs:*",
+        "sts:GetCallerIdentity",
+        "sts:AssumeRole"
       ],
       "Resource": "*"
     }

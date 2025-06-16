@@ -1,5 +1,6 @@
 resource "aws_s3_bucket" "mlflow_bucket" {
-  bucket = "${var.bucket_name}-${var.environment}"
+  bucket        = "${var.bucket_name}-${var.environment}"
+  force_destroy = true
 
   tags = {
     Name        = "mlflow_artifacts"
