@@ -9,9 +9,12 @@ This repository contains GitHub Actions workflows for deploying and managing MLf
 ### 1. **Infrastructure Deploy** (`infrastructure-deploy.yml`) 🆕
 Deploys the complete AWS infrastructure for MLflow from scratch or manages existing resources.
 
+**Prerequisites:**
+- ⚠️ **Terraform Backend**: Assumes S3 backend bucket and DynamoDB lock table already exist
+
 **Capabilities:**
-- ✅ **Clean Setup**: Can deploy to a fresh AWS account with zero existing infrastructure
-- ✅ **State Management**: Automatically creates Terraform S3 backend and DynamoDB table
+- ✅ **Clean Setup**: Can deploy to AWS accounts with existing Terraform backend
+- ✅ **Resume Deployment**: Can resume infrastructure from suspended state
 - ✅ **Environment Support**: Supports dev/staging/prod environments
 - ✅ **Approval Options**: Manual approval or auto-approve modes
 
@@ -37,12 +40,16 @@ Deploys, redeploys, or destroys MLflow application on existing EKS infrastructur
 
 ### **Scenario 1: Fresh AWS Account (Clean Setup)**
 
+**Prerequisites:**
+- Create Terraform state backend first (S3 bucket + DynamoDB table)
+- Or run any destroy workflow once with `clean_state_backend: false` to create backend
+
 1. **Deploy Infrastructure**:
    ```
    Workflow: Infrastructure Deploy
    Inputs:
    - environment: dev
-   - clean_setup: true
+   - deployment_type: clean_setup
    - auto_approve: false (recommended for first run)
    ```
 
@@ -97,10 +104,14 @@ Configure these secrets in your GitHub repository:
 
 ### **Infrastructure Deploy Workflow**
 
+**Prerequisites:**
+- Terraform S3 backend bucket and DynamoDB lock table must already exist
+- Use `infrastructure-full-destroy.yml` with `clean_state_backend: false` to create backend if needed
+
 **Key Features:**
-- **Automatic State Backend**: Creates S3 bucket and DynamoDB table for Terraform state
-- **Environment Isolation**: Each environment gets its own state backend
-- **Flexible Configuration**: Supports both clean setup and existing resources
+- **Assumes Existing Backend**: Uses pre-configured S3 bucket and DynamoDB table for Terraform state
+- **Environment Isolation**: Each environment uses its own state backend configuration
+- **Flexible Configuration**: Supports both clean setup and existing resources  
 - **Error Recovery**: Handles state lock issues automatically
 - **Plan Artifacts**: Uploads Terraform plans for review
 
@@ -110,9 +121,8 @@ Configure these secrets in your GitHub repository:
 existing_resources = false
 vpc_id = null  # Will create new VPC
 
-# For existing setup  
-existing_resources = true
-vpc_id = "vpc-existing"  # Uses existing VPC
+# For resume deployment
+existing_resources = true  # Uses existing tfvars configuration
 ```
 
 ### **Infrastructure Destroy Workflow**
