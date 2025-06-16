@@ -109,14 +109,22 @@ jobs:
             
             # Try to import the KMS key into Terraform state
             echo "Attempting to import KMS key into Terraform state..."
-            if ! terraform state show module.eks.aws_kms_key.this[0] 2>/dev/null; then
-              terraform import "module.eks.aws_kms_key.this[0]" "$KEY_ID" || echo "Key might already be in state or doesn't need import"
+            if ! terraform state show module.eks.aws_kms_key.this 2>/dev/null; then
+              echo "Importing KMS key with required variables..."
+              terraform import \
+                -var-file="${{ env.ENVIRONMENT }}.tfvars" \
+                -var "cluster_name=mlflow-cluster" \
+                "module.eks.aws_kms_key.this" "$KEY_ID" || echo "Key might already be in state or import failed"
             fi
             
             # Try to import the KMS alias into Terraform state  
             echo "Attempting to import KMS alias into Terraform state..."
-            if ! terraform state show module.eks.aws_kms_alias.this[0] 2>/dev/null; then
-              terraform import "module.eks.aws_kms_alias.this[0]" "$KMS_ALIAS" || echo "Alias might already be in state or doesn't need import"
+            if ! terraform state show module.eks.aws_kms_alias.this 2>/dev/null; then
+              echo "Importing KMS alias with required variables..."
+              terraform import \
+                -var-file="${{ env.ENVIRONMENT }}.tfvars" \
+                -var "cluster_name=mlflow-cluster" \
+                "module.eks.aws_kms_alias.this" "$KMS_ALIAS" || echo "Alias might already be in state or import failed"
             fi
             
             echo "✅ KMS import completed"

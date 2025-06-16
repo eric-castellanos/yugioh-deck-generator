@@ -15,7 +15,7 @@ module "eks" {
   # Use our custom KMS key (existing or newly created)
   create_kms_key = false
   cluster_encryption_config = {
-    provider_key_arn = local.final_kms_key_id
+    provider_key_arn = aws_kms_key.this.arn
     resources        = ["secrets"]
   }
 
