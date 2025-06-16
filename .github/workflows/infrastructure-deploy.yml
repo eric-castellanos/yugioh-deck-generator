@@ -63,12 +63,6 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform Backend Configuration
-        run: |
-          # The backend is already configured in terraform.tf
-          echo "Using existing backend configuration from terraform.tf"
-          echo "Backend S3 bucket and DynamoDB table are assumed to exist"
-
       - name: Create Environment-Specific tfvars
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
