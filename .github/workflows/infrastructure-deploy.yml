@@ -92,6 +92,38 @@ jobs:
       - name: Terraform Init
         run: terraform init -input=false
 
+      - name: Check and Import Existing KMS Resources
+        continue-on-error: true
+        run: |
+          echo "🔐 Checking for existing KMS resources..."
+          
+          KMS_ALIAS="alias/eks/mlflow-cluster-${{ env.ENVIRONMENT }}"
+          
+          # Check if KMS alias exists
+          if aws kms describe-key --key-id "$KMS_ALIAS" 2>/dev/null; then
+            echo "Found existing KMS alias: $KMS_ALIAS"
+            
+            # Get the key ID from the alias
+            KEY_ID=$(aws kms describe-key --key-id "$KMS_ALIAS" --query 'KeyMetadata.KeyId' --output text)
+            echo "Key ID: $KEY_ID"
+            
+            # Try to import the KMS key into Terraform state
+            echo "Attempting to import KMS key into Terraform state..."
+            if ! terraform state show module.eks.aws_kms_key.this[0] 2>/dev/null; then
+              terraform import "module.eks.aws_kms_key.this[0]" "$KEY_ID" || echo "Key might already be in state or doesn't need import"
+            fi
+            
+            # Try to import the KMS alias into Terraform state  
+            echo "Attempting to import KMS alias into Terraform state..."
+            if ! terraform state show module.eks.aws_kms_alias.this[0] 2>/dev/null; then
+              terraform import "module.eks.aws_kms_alias.this[0]" "$KMS_ALIAS" || echo "Alias might already be in state or doesn't need import"
+            fi
+            
+            echo "✅ KMS import completed"
+          else
+            echo "No existing KMS alias found. Will create new KMS resources."
+          fi
+
       - name: Terraform Plan
         id: plan
         continue-on-error: true

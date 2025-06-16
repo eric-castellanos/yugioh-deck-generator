@@ -38,6 +38,11 @@ variable "environment" {
   default = "dev"
 }
 
+variable "region" {
+  description = "AWS region"
+  type        = string
+}
+
 variable "create_cloudwatch_log_group" {
   description = "Determines whether to create CloudWatch Log Group for EKS cluster"
   type        = bool
@@ -52,10 +57,6 @@ variable "account_id" {
 variable "github_actions_role_arn" {
   description = "ARN of the GitHub Actions role"
   type        = string
-}
-
-locals {
-  full_cluster_name = "${var.cluster_name}-${var.environment}"
 }
 
 output "effective_control_plane_subnet_ids" {

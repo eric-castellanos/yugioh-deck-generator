@@ -1,3 +1,7 @@
+locals {
+  full_cluster_name = "${var.cluster_name}-${var.environment}"
+}
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 19.0"
@@ -7,6 +11,13 @@ module "eks" {
   subnet_ids   = var.subnet_ids
 
   create_cloudwatch_log_group = var.create_cloudwatch_log_group
+
+  # Use our custom KMS key (existing or newly created)
+  create_kms_key = false
+  cluster_encryption_config = {
+    provider_key_arn = local.final_kms_key_id
+    resources        = ["secrets"]
+  }
 
   # Enable public access for personal project
   cluster_endpoint_public_access  = true

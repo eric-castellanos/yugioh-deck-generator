@@ -51,6 +51,7 @@ module "eks" {
   account_id                  = var.account_id
   github_actions_role_arn     = var.github_actions_role_arn
   environment                 = var.environment
+  region                      = var.region
 }
 
 output "mlflow_db_endpoint" {
