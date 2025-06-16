@@ -18,14 +18,15 @@ Deploys the complete AWS infrastructure for MLflow from scratch or manages exist
 - ✅ **Environment Support**: Supports dev/staging/prod environments
 - ✅ **Approval Options**: Manual approval or auto-approve modes
 
-### 2. **Infrastructure Destroy** (`infrastructure-destroy.yml`)
+### 2. **Infrastructure Destroy Complete** (`infrastructure-destroy-complete.yml`)
 Safely tears down all MLflow infrastructure including optional state backend cleanup.
 
 **Capabilities:**
 - ✅ **Complete Teardown**: Destroys all infrastructure resources
 - ✅ **Kubernetes Cleanup**: Removes K8s resources before destroying EKS
+- ✅ **Enhanced IAM Cleanup**: Works around GitHub Actions permission limitations
 - ✅ **State Backend Cleanup**: Optional destruction of Terraform state storage
-- ✅ **Safety Checks**: Requires explicit confirmation
+- ✅ **Safety Checks**: Requires explicit confirmation (`destroy-all`)
 
 ### 3. **MLflow Kubernetes Deploy** (`mlflow-k8s-deploy.yml`)
 Deploys, redeploys, or destroys MLflow application on existing EKS infrastructure.
@@ -83,10 +84,10 @@ Deploys, redeploys, or destroys MLflow application on existing EKS infrastructur
 
 2. **Destroy Infrastructure**:
    ```
-   Workflow: Infrastructure Destroy
+   Workflow: Infrastructure Destroy Complete
    Inputs:
    - environment: dev
-   - confirm_destroy: destroy
+   - confirm_destroy: destroy-all
    - clean_state_backend: true
    ```
 
@@ -106,7 +107,7 @@ Configure these secrets in your GitHub repository:
 
 **Prerequisites:**
 - Terraform S3 backend bucket and DynamoDB lock table must already exist
-- Use `infrastructure-full-destroy.yml` with `clean_state_backend: false` to create backend if needed
+- Use `infrastructure-destroy-complete.yml` with `clean_state_backend: false` to create backend if needed
 
 **Key Features:**
 - **Assumes Existing Backend**: Uses pre-configured S3 bucket and DynamoDB table for Terraform state
@@ -125,11 +126,12 @@ vpc_id = null  # Will create new VPC
 existing_resources = true  # Uses existing tfvars configuration
 ```
 
-### **Infrastructure Destroy Workflow**
+### **Infrastructure Destroy Complete Workflow**
 
 **Key Features:**
-- **Safe Destruction**: Requires explicit "destroy" confirmation
+- **Safe Destruction**: Requires explicit "destroy-all" confirmation
 - **K8s Cleanup First**: Removes Kubernetes resources before destroying EKS
+- **Enhanced IAM Cleanup**: Works around GitHub Actions permission limitations  
 - **LoadBalancer Cleanup**: Ensures AWS LoadBalancers are deleted
 - **Optional State Cleanup**: Can destroy Terraform state backend
 - **Detailed Logging**: Uploads destruction logs as artifacts
