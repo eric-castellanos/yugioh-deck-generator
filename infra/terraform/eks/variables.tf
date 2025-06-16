@@ -70,8 +70,3 @@ variable "private_subnet_ids" {
   type        = list(string)
   default     = []
 }
-
-output "effective_control_plane_subnet_ids" {
-  description = "Effective subnet IDs for the EKS control plane"
-  value       = coalescelist(var.control_plane_subnet_ids, var.subnet_ids)
-}

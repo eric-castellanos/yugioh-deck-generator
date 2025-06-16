@@ -106,11 +106,3 @@ resource "aws_iam_role_policy_attachment" "ecr_read_only" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
   role       = aws_iam_role.eks_node_group.name
 }
-
-variable "public_subnet_ids" {
-  type = list(string)
-}
-
-variable "private_subnet_ids" {
-  type = list(string)
-}
