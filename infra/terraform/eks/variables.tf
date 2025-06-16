@@ -62,11 +62,13 @@ variable "github_actions_role_arn" {
 variable "public_subnet_ids" {
   description = "List of public subnet IDs"
   type        = list(string)
+  default     = []
 }
 
 variable "private_subnet_ids" {
-  description = "List of private subnet IDs"
+  description = "List of private subnet IDs"  
   type        = list(string)
+  default     = []
 }
 
 output "effective_control_plane_subnet_ids" {
