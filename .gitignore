@@ -17,7 +17,7 @@
 .ipynb_checkpoints/
 
 # Environs
-.env
+.env*
 /.venv/
 
 # Terraform
