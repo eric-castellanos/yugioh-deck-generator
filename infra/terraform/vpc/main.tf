@@ -41,6 +41,11 @@ module "vpc" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
+  # Enable NAT Gateways for private subnet internet access
+  enable_nat_gateway = true
+  single_nat_gateway = true  # Cost optimization: use single NAT gateway
+  enable_vpn_gateway = false
+
   # Enable auto-assign public IP for public subnets (required for EKS nodes)
   map_public_ip_on_launch = true
 

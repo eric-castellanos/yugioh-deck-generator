@@ -8,7 +8,9 @@ module "eks" {
 
   cluster_name = local.full_cluster_name
   vpc_id       = var.vpc_id
-  subnet_ids   = var.subnet_ids
+  
+  # Control plane should have access to both public and private subnets
+  subnet_ids = concat(var.private_subnet_ids, var.public_subnet_ids)
 
   create_cloudwatch_log_group = var.create_cloudwatch_log_group
 
@@ -52,7 +54,9 @@ resource "aws_eks_node_group" "default_node_group" {
   cluster_name    = local.full_cluster_name
   node_group_name = "default_node_group"
   node_role_arn   = aws_iam_role.eks_node_group.arn
-  subnet_ids      = var.subnet_ids
+  
+  # Worker nodes should be in private subnets only (with NAT gateway access)
+  subnet_ids      = var.private_subnet_ids
 
   scaling_config {
     desired_size = 2

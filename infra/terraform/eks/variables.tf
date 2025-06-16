@@ -59,6 +59,16 @@ variable "github_actions_role_arn" {
   type        = string
 }
 
+variable "public_subnet_ids" {
+  description = "List of public subnet IDs"
+  type        = list(string)
+}
+
+variable "private_subnet_ids" {
+  description = "List of private subnet IDs"
+  type        = list(string)
+}
+
 output "effective_control_plane_subnet_ids" {
   description = "Effective subnet IDs for the EKS control plane"
   value       = coalescelist(var.control_plane_subnet_ids, var.subnet_ids)
