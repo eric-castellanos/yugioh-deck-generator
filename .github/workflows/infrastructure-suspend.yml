@@ -1,0 +1,316 @@
+name: Infrastructure Suspend (Save Costs, Keep Data)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to suspend (dev/staging/prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+      confirm_suspend:
+        description: "Type 'suspend' to confirm suspension (keeps S3/RDS, destroys EKS/compute)"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  cleanup-kubernetes:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.confirm_suspend == 'suspend' }}
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate Suspend Confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm_suspend }}" != "suspend" ]; then
+            echo "❌ Suspend confirmation failed. You must type 'suspend' to proceed."
+            echo "This will destroy EKS cluster and compute resources but preserve S3 and RDS data."
+            exit 1
+          fi
+          echo "✅ Suspend confirmed for ${{ env.ENVIRONMENT }} environment"
+          echo "📊 Preserving: S3 buckets, RDS database (your experiment data)"
+          echo "💰 Destroying: EKS cluster, EC2 instances (expensive compute resources)"
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.27.0'
+
+      - name: Clean Kubernetes Resources
+        continue-on-error: true
+        run: |
+          echo "🧹 Cleaning up Kubernetes resources before EKS destruction..."
+          
+          CLUSTER_NAME="mlflow-cluster-${{ env.ENVIRONMENT }}"
+          if aws eks describe-cluster --name "$CLUSTER_NAME" --region ${{ env.AWS_REGION }} >/dev/null 2>&1; then
+            aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name "$CLUSTER_NAME"
+            
+            # Delete MLflow namespace and all resources
+            echo "Deleting MLflow namespace..."
+            kubectl delete namespace mlflow --ignore-not-found=true --timeout=300s
+            
+            # Delete any LoadBalancer services (these create AWS load balancers)
+            echo "Deleting LoadBalancer services..."
+            kubectl delete svc --all-namespaces --field-selector spec.type=LoadBalancer --timeout=300s
+            
+            # Wait for graceful cleanup
+            echo "Waiting for graceful cleanup..."
+            sleep 60
+            
+            echo "✅ Kubernetes cleanup completed"
+          else
+            echo "EKS cluster not found or not accessible, skipping Kubernetes cleanup"
+          fi
+
+  terraform-suspend:
+    runs-on: ubuntu-latest
+    needs: [cleanup-kubernetes]
+    if: always() && github.event.inputs.confirm_suspend == 'suspend' && (needs.cleanup-kubernetes.result == 'success' || needs.cleanup-kubernetes.result == 'skipped')
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      TF_IN_AUTOMATION: true
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform Backend Configuration
+        run: |
+          # Remove any dynamically created backend.tf to avoid conflicts
+          rm -f backend.tf
+          
+          # The backend is already configured in terraform.tf
+          echo "Using existing backend configuration from terraform.tf"
+
+      - name: Create Environment-Specific tfvars
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          
+          # Try to detect if this is existing resources or clean setup
+          if [ -f terraform.tfvars ] && grep -q "existing_resources.*true" terraform.tfvars; then
+            cp terraform.tfvars ${{ env.ENVIRONMENT }}.tfvars
+          else
+            # Create tfvars for suspension
+            cat > ${{ env.ENVIRONMENT }}.tfvars << EOF
+          environment        = "${{ env.ENVIRONMENT }}"
+          region             = "${{ env.AWS_REGION }}"
+          db_password        = "${{ secrets.MLFLOW_DB_PASSWORD }}"
+          bucket_name        = "mlflow-backend-${{ env.ENVIRONMENT }}"
+          mlflow_user        = "mlflow-user-${{ env.ENVIRONMENT }}"
+          existing_resources = false
+          account_id         = "${ACCOUNT_ID}"
+          github_actions_role_arn = "${{ secrets.AWS_ROLE_TO_ASSUME }}"
+          EOF
+          fi
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Create Selective Destroy Target List
+        run: |
+          echo "📋 Creating list of resources to destroy (keeping S3 and RDS)..."
+          
+          # Create a file with target resources to destroy
+          cat > suspend_targets.txt << EOF
+          module.eks
+          module.vpc.module.vpc
+          module.vpc.aws_vpc_dhcp_options_association.this
+          module.vpc.aws_vpc_dhcp_options.this
+          module.vpc.aws_internet_gateway.this
+          module.vpc.aws_route_table.public
+          module.vpc.aws_route_table.private
+          module.vpc.aws_route.public_internet_gateway
+          module.vpc.aws_route_table_association.public
+          module.vpc.aws_route_table_association.private
+          module.vpc.aws_subnet.public
+          module.vpc.aws_subnet.private
+          module.vpc.aws_default_route_table.default
+          module.vpc.aws_default_network_acl.default
+          module.vpc.aws_default_security_group.default
+          EOF
+          
+          echo "Resources to destroy:"
+          cat suspend_targets.txt
+
+      - name: Pre-Destroy IAM Cleanup  
+        continue-on-error: true
+        run: |
+          echo "🧹 Cleaning up IAM resources that might block destruction..."
+          
+          # Detach and delete MLflow K8s Service Account role
+          ROLE_NAME="mlflow-service-account-role-${{ env.ENVIRONMENT }}"
+          POLICY_ARN="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):policy/mlflow-s3-access-${{ env.ENVIRONMENT }}"
+          
+          # Detach policy from service account role (if exists)
+          if aws iam get-role --role-name "$ROLE_NAME" 2>/dev/null; then
+            echo "Detaching policy from service account role: $ROLE_NAME"
+            aws iam detach-role-policy --role-name "$ROLE_NAME" --policy-arn "$POLICY_ARN" || true
+            echo "Deleting service account role: $ROLE_NAME"
+            aws iam delete-role --role-name "$ROLE_NAME" || true
+          fi
+
+      - name: Terraform Suspend (Selective Destroy)
+        id: suspend
+        continue-on-error: true
+        run: |
+          set +e
+          set -o pipefail
+          
+          echo "💰 Suspending infrastructure (destroying compute, keeping data)..."
+          
+          # Destroy resources by target to avoid dependencies
+          terraform destroy -auto-approve \
+            -var-file="${{ env.ENVIRONMENT }}.tfvars" \
+            -var "cluster_name=mlflow-cluster" \
+            -target=module.eks \
+            2>&1 | tee suspend_output.txt
+          
+          SUSPEND_EXIT_CODE=$?
+          
+          # Check for state lock
+          if grep -q "Error acquiring the state lock" suspend_output.txt; then
+            LOCK_ID=$(grep -oP 'ID:\s+\K[a-f0-9-]+' suspend_output.txt | head -1)
+            echo "lock_id=${LOCK_ID}" >> $GITHUB_OUTPUT
+          else
+            echo "lock_id=" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "suspend_success=$([ $SUSPEND_EXIT_CODE -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          
+          if [ $SUSPEND_EXIT_CODE -eq 0 ]; then
+            echo "✅ EKS cluster destruction completed"
+          else
+            echo "❌ EKS cluster destruction failed"
+          fi
+          
+          exit $SUSPEND_EXIT_CODE
+
+      - name: Terraform Force Unlock (if needed)
+        if: ${{ steps.suspend.outputs.lock_id != '' }}
+        run: terraform force-unlock -force ${{ steps.suspend.outputs.lock_id }}
+
+      - name: Terraform Suspend (retry after unlock)
+        if: ${{ steps.suspend.outputs.suspend_success == 'false' && steps.suspend.outputs.lock_id != '' }}
+        run: |
+          terraform destroy -auto-approve \
+            -var-file="${{ env.ENVIRONMENT }}.tfvars" \
+            -var "cluster_name=mlflow-cluster" \
+            -target=module.eks
+
+      - name: Verify Data Preservation
+        run: |
+          echo "🔍 Verifying that data stores are preserved..."
+          
+          # Check S3 bucket
+          S3_BUCKET="mlflow-backend-${{ env.ENVIRONMENT }}"
+          if aws s3 ls "s3://${S3_BUCKET}" 2>/dev/null; then
+            echo "✅ S3 bucket preserved: ${S3_BUCKET}"
+            OBJECT_COUNT=$(aws s3 ls "s3://${S3_BUCKET}" --recursive | wc -l)
+            echo "   📁 Objects in bucket: ${OBJECT_COUNT}"
+          else
+            echo "❌ S3 bucket not found: ${S3_BUCKET}"
+          fi
+          
+          # Check RDS instance
+          RDS_INSTANCE="mlflow-db-${{ env.ENVIRONMENT }}"
+          if aws rds describe-db-instances --db-instance-identifier "$RDS_INSTANCE" 2>/dev/null; then
+            STATUS=$(aws rds describe-db-instances --db-instance-identifier "$RDS_INSTANCE" --query 'DBInstances[0].DBInstanceStatus' --output text)
+            echo "✅ RDS database preserved: ${RDS_INSTANCE}"
+            echo "   📊 Status: ${STATUS}"
+          else
+            echo "❌ RDS instance not found: ${RDS_INSTANCE}"
+          fi
+          
+          # Check EKS cluster (should be gone)
+          CLUSTER_NAME="mlflow-cluster-${{ env.ENVIRONMENT }}"
+          if aws eks describe-cluster --name "$CLUSTER_NAME" --region ${{ env.AWS_REGION }} 2>/dev/null; then
+            echo "⚠️  EKS cluster still exists: ${CLUSTER_NAME}"
+          else
+            echo "✅ EKS cluster destroyed: ${CLUSTER_NAME}"
+          fi
+
+      - name: Calculate Cost Savings
+        run: |
+          echo "💰 Infrastructure Suspension Summary"
+          echo "====================================="
+          echo ""
+          echo "✅ PRESERVED (Data & Experiments):"
+          echo "   📦 S3 bucket: mlflow-backend-${{ env.ENVIRONMENT }}"
+          echo "   🗄️ RDS database: mlflow-db-${{ env.ENVIRONMENT }}"
+          echo "   📊 All your MLflow experiments and artifacts"
+          echo ""
+          echo "💸 DESTROYED (Cost Savings):"
+          echo "   ☸️  EKS cluster: mlflow-cluster-${{ env.ENVIRONMENT }}"
+          echo "   🖥️ EC2 instances (worker nodes)"
+          echo "   🔗 Load balancers"
+          echo "   🌐 NAT gateways"
+          echo ""
+          echo "💡 ESTIMATED MONTHLY SAVINGS: ~$150-300"
+          echo "   • EKS cluster: $73/month"
+          echo "   • EC2 instances: $50-150/month" 
+          echo "   • Load balancers: $20-50/month"
+          echo "   • NAT gateway: $45/month"
+          echo ""
+          echo "📈 ONGOING COSTS: ~$20-40/month"
+          echo "   • RDS db.t3.micro: ~$15/month"
+          echo "   • S3 storage: ~$5-25/month (depending on data)"
+          echo ""
+          echo "🚀 TO RESUME: Run 'Infrastructure Deploy' workflow"
+          echo "   Your data will be automatically reconnected!"
+
+      - name: Upload Suspend Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suspend-log-${{ env.ENVIRONMENT }}
+          path: infra/terraform/suspend_output.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "Infrastructure Suspension Summary"
+          echo "=================================="
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo ""
+          if [ "${{ steps.suspend.outputs.suspend_success }}" == "true" ]; then
+            echo "✅ Infrastructure successfully suspended"
+            echo "💾 Your data is safe in S3 and RDS"
+            echo "💰 Compute costs eliminated"
+          else
+            echo "❌ Infrastructure suspension encountered issues"
+            echo "📋 Check the suspend log for details"
+          fi

@@ -1,4 +1,4 @@
-name: Infrastructure Plan & Apply
+name: Infrastructure Deploy (Create or Resume)
 
 on:
   workflow_dispatch:
@@ -12,11 +12,14 @@ on:
         - dev
         - staging
         - prod
-      clean_setup:
-        description: 'Clean setup (no existing resources)'
+      deployment_type:
+        description: 'Deployment type: resume (from suspension) or clean_setup (from scratch)'
         required: true
-        default: true
-        type: boolean
+        default: 'resume'
+        type: choice
+        options:
+        - resume
+        - clean_setup
       auto_approve:
         description: 'Auto-approve terraform apply'
         required: true
@@ -33,7 +36,7 @@ env:
 jobs:
   setup-state-backend:
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.clean_setup == 'true' }}
+    if: ${{ github.event.inputs.deployment_type == 'clean_setup' }}
     outputs:
       state-bucket: ${{ steps.create-backend.outputs.state-bucket }}
     steps:
@@ -93,7 +96,7 @@ jobs:
     if: always() && (needs.setup-state-backend.result == 'success' || needs.setup-state-backend.result == 'skipped')
     env:
       ENVIRONMENT: ${{ github.event.inputs.environment }}
-      CLEAN_SETUP: ${{ github.event.inputs.clean_setup }}
+      DEPLOYMENT_TYPE: ${{ github.event.inputs.deployment_type }}
 
     defaults:
       run:
@@ -125,7 +128,7 @@ jobs:
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           
           # Create tfvars for clean setup or existing resources
-          if [ "${{ env.CLEAN_SETUP }}" == "true" ]; then
+          if [ "${{ env.DEPLOYMENT_TYPE }}" == "clean_setup" ]; then
             cat > ${{ env.ENVIRONMENT }}.tfvars << EOF
           environment        = "${{ env.ENVIRONMENT }}"
           region             = "${{ env.AWS_REGION }}"
