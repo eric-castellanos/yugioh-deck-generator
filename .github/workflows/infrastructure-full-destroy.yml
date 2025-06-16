@@ -161,19 +161,87 @@ jobs:
         run: |
           echo "🧹 Cleaning up IAM resources that might block destruction..."
           
-          # Detach and delete MLflow S3 access policy
-          POLICY_ARN="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):policy/mlflow-s3-access-${{ env.ENVIRONMENT }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           
-          # Get all roles that have this policy attached
-          aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyRoles[].RoleName' --output text 2>/dev/null | tr '\t' '\n' | while read -r role; do
-            if [ -n "$role" ]; then
-              echo "Detaching policy from role: $role"
-              aws iam detach-role-policy --role-name "$role" --policy-arn "$POLICY_ARN" || true
-            fi
-          done
+          # Clean up MLflow K8s Service Account role and policy
+          ROLE_NAME="mlflow-service-account-role-${{ env.ENVIRONMENT }}"
+          POLICY_NAME="mlflow-s3-access-${{ env.ENVIRONMENT }}"
+          POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${POLICY_NAME}"
           
-          # Delete the policy
-          aws iam delete-policy --policy-arn "$POLICY_ARN" || true
+          echo "Cleaning up MLflow service account IAM resources..."
+          
+          # Detach policy from service account role (if exists)
+          if aws iam get-role --role-name "$ROLE_NAME" 2>/dev/null; then
+            echo "  Detaching policy from service account role: $ROLE_NAME"
+            aws iam detach-role-policy --role-name "$ROLE_NAME" --policy-arn "$POLICY_ARN" 2>/dev/null || true
+            echo "  Deleting service account role: $ROLE_NAME"
+            aws iam delete-role --role-name "$ROLE_NAME" 2>/dev/null || true
+          fi
+          
+          # Clean up the main mlflow-s3-access policy (without environment suffix)
+          MAIN_POLICY_NAME="mlflow-s3-access"
+          MAIN_POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${MAIN_POLICY_NAME}"
+          
+          echo "Cleaning up main MLflow S3 policy..."
+          
+          # Find all entities attached to the policy
+          if aws iam get-policy --policy-arn "$MAIN_POLICY_ARN" 2>/dev/null; then
+            echo "  Found policy: $MAIN_POLICY_NAME"
+            
+            # List and detach from all roles
+            echo "  Checking roles attached to policy..."
+            aws iam list-entities-for-policy --policy-arn "$MAIN_POLICY_ARN" --entity-filter Role --query 'PolicyRoles[].RoleName' --output text | while read -r role; do
+              if [ ! -z "$role" ] && [ "$role" != "None" ]; then
+                echo "    Detaching policy from role: $role"
+                aws iam detach-role-policy --role-name "$role" --policy-arn "$MAIN_POLICY_ARN" 2>/dev/null || true
+              fi
+            done
+            
+            # List and detach from all users
+            echo "  Checking users attached to policy..."
+            aws iam list-entities-for-policy --policy-arn "$MAIN_POLICY_ARN" --entity-filter User --query 'PolicyUsers[].UserName' --output text | while read -r user; do
+              if [ ! -z "$user" ] && [ "$user" != "None" ]; then
+                echo "    Detaching policy from user: $user"
+                aws iam detach-user-policy --user-name "$user" --policy-arn "$MAIN_POLICY_ARN" 2>/dev/null || true
+              fi
+            done
+            
+            # List and detach from all groups
+            echo "  Checking groups attached to policy..."
+            aws iam list-entities-for-policy --policy-arn "$MAIN_POLICY_ARN" --entity-filter Group --query 'PolicyGroups[].GroupName' --output text | while read -r group; do
+              if [ ! -z "$group" ] && [ "$group" != "None" ]; then
+                echo "    Detaching policy from group: $group"
+                aws iam detach-group-policy --group-name "$group" --policy-arn "$MAIN_POLICY_ARN" 2>/dev/null || true
+              fi
+            done
+            
+            # Wait a moment for detachments to propagate
+            echo "  Waiting for detachments to propagate..."
+            sleep 10
+            
+            # Try to delete the policy
+            echo "  Attempting to delete policy: $MAIN_POLICY_NAME"
+            aws iam delete-policy --policy-arn "$MAIN_POLICY_ARN" 2>/dev/null || true
+          fi
+          
+          # Also clean up environment-specific policy if it exists
+          if aws iam get-policy --policy-arn "$POLICY_ARN" 2>/dev/null; then
+            echo "  Found environment policy: $POLICY_NAME"
+            
+            # Detach from all entities and delete
+            aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --entity-filter Role --query 'PolicyRoles[].RoleName' --output text | while read -r role; do
+              if [ ! -z "$role" ] && [ "$role" != "None" ]; then
+                echo "    Detaching env policy from role: $role"
+                aws iam detach-role-policy --role-name "$role" --policy-arn "$POLICY_ARN" 2>/dev/null || true
+              fi
+            done
+            
+            sleep 5
+            echo "  Deleting environment policy: $POLICY_NAME"
+            aws iam delete-policy --policy-arn "$POLICY_ARN" 2>/dev/null || true
+          fi
+          
+          echo "✅ IAM cleanup completed"
 
       - name: Terraform Destroy
         id: destroy
