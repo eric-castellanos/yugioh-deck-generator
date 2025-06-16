@@ -67,7 +67,7 @@ jobs:
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           
-          # Create tfvars for clean setup or existing resources
+          # Create tfvars for clean setup or resume deployment
           if [ "${{ env.DEPLOYMENT_TYPE }}" == "clean_setup" ]; then
             cat > ${{ env.ENVIRONMENT }}.tfvars << EOF
           environment        = "${{ env.ENVIRONMENT }}"
@@ -80,8 +80,17 @@ jobs:
           github_actions_role_arn = "${{ secrets.AWS_ROLE_TO_ASSUME }}"
           EOF
           else
-            # Use existing tfvars for existing resources
-            cp terraform.tfvars ${{ env.ENVIRONMENT }}.tfvars
+            # Resume deployment - reuse existing resources that might have been suspended
+            cat > ${{ env.ENVIRONMENT }}.tfvars << EOF
+          environment        = "${{ env.ENVIRONMENT }}"
+          region             = "${{ env.AWS_REGION }}"
+          db_password        = "${{ secrets.MLFLOW_DB_PASSWORD }}"
+          bucket_name        = "mlflow-backend-${{ env.ENVIRONMENT }}"
+          mlflow_user        = "mlflow-user-${{ env.ENVIRONMENT }}"
+          existing_resources = true
+          account_id         = "${ACCOUNT_ID}"
+          github_actions_role_arn = "${{ secrets.AWS_ROLE_TO_ASSUME }}"
+          EOF
           fi
 
       - name: Validate Terraform Configuration
