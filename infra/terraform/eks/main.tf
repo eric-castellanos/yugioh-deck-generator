@@ -55,21 +55,38 @@ resource "aws_eks_node_group" "default_node_group" {
   node_group_name = "default_node_group"
   node_role_arn   = aws_iam_role.eks_node_group.arn
   
-  # Worker nodes should be in private subnets only (with NAT gateway access)
-  subnet_ids      = var.private_subnet_ids
+  # Temporarily use public subnets to troubleshoot networking issues
+  # TODO: Switch back to private subnets once working
+  subnet_ids      = var.public_subnet_ids
 
   scaling_config {
-    desired_size = 2
+    desired_size = 1  # Start with just 1 node for testing
     max_size     = 3
     min_size     = 1
   }
 
   instance_types = [var.node_instance_type]
   capacity_type  = "ON_DEMAND"
+  
+  # Use Amazon Linux 2 instead of AL2023 for better compatibility
+  ami_type = "AL2_x86_64"
+  
+  # Add explicit update config
+  update_config {
+    max_unavailable = 1
+  }
 
   tags = {
     Environment = var.environment
+    Debug = "troubleshooting-node-join"
   }
+  
+  # Ensure proper dependencies
+  depends_on = [
+    aws_iam_role_policy_attachment.eks_worker_node_policy,
+    aws_iam_role_policy_attachment.eks_cni_policy,
+    aws_iam_role_policy_attachment.ecr_read_only,
+  ]
 }
 
 resource "aws_iam_role" "eks_node_group" {
