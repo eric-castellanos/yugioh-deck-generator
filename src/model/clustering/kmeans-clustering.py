@@ -21,6 +21,7 @@ from mlflow.data.pandas_dataset import PandasDataset
 #from kneed import KneeLocator
 
 from src.utils.s3_utils import read_parquet_from_s3
+from src.utils.clustering_metrics_summary import calculate_enhanced_clustering_metrics
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -194,7 +195,15 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
 
         meta_df = meta_df.with_columns(pl.Series(name="cluster", values=labels))
 
-        # Calculate and log metrics
+        # Calculate enhanced clustering metrics
+        enhanced_metrics = calculate_enhanced_clustering_metrics(meta_df)
+        
+        # Log enhanced metrics to MLflow
+        for metric_name, metric_value in enhanced_metrics.items():
+            if isinstance(metric_value, (int, float)):
+                mlflow.log_metric(f"enhanced_{metric_name}", metric_value)
+
+        # Calculate and log standard metrics
         if "archetype" in meta_df.columns:
             score = adjusted_rand_score(meta_df["archetype"].to_list(), labels)
             logging.info(f"Adjusted Rand Index (vs. archetype): {score:.4f}")
@@ -291,7 +300,8 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
             "pca_components": PCA_COMPONENTS,
             "explained_variance_ratio": float(explained_var.sum()),
             "silhouette_score": float(silhouette),
-            "adjusted_rand_index": float(score) if "archetype" in meta_df.columns else None
+            "adjusted_rand_index": float(score) if "archetype" in meta_df.columns else None,
+            "enhanced_metrics": enhanced_metrics
         }
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
