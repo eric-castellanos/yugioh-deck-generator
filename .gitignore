@@ -37,3 +37,7 @@ terraform.tfstate*
 *.py[cod]
 __pycache__/
 
+# MLFlow Local
+*mlruns/
+/mlruns/*
+
