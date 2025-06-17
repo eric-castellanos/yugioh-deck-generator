@@ -1,3 +1,7 @@
+"""
+DBSCAN clustering experiment for Yu-Gi-Oh card data with comprehensive MLflow tracking.
+"""
+
 import io
 import logging
 import json
@@ -11,14 +15,13 @@ import polars as pl
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from sklearn.cluster import KMeans
+from sklearn.cluster import DBSCAN
 from sklearn.metrics import silhouette_score, adjusted_rand_score
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+from sklearn.preprocessing import StandardScaler
 import mlflow
 import mlflow.data
-from mlflow.data.pandas_dataset import PandasDataset
-#from kneed import KneeLocator
 
 from src.utils.s3_utils import read_parquet_from_s3
 
@@ -31,12 +34,10 @@ mlflow.set_experiment("/yugioh_card_clustering")
 
 # Parameters
 S3_BUCKET = "yugioh-data"
-N_CLUSTERS = 5 # (based on elbow plot) 
+EPS = 0.5  # Maximum distance between two samples for one to be considered as in the neighborhood of the other
+MIN_SAMPLES = 5  # Number of samples in a neighborhood for a point to be considered as a core point
 PCA_COMPONENTS = 2
 RANDOM_SEED = 42
-
-# Archetype cardinality reduction parameters  
-ARCHETYPE_MIN_COUNT = 2  # Only combine archetypes with 1 card (singletons)
 
 # Feature type to S3 key mapping
 FEATURE_CONFIGS = {
@@ -59,7 +60,7 @@ FEATURE_CONFIGS = {
 
 
 def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "combined"]):
-    """Run K-means clustering experiment with specified feature type."""
+    """Run DBSCAN clustering experiment with specified feature type."""
     
     config = FEATURE_CONFIGS[feature_type]
     s3_key = config["s3_key"]
@@ -68,7 +69,7 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
     with mlflow.start_run():
         # Set tags for easy querying and organization
         mlflow.set_tag("model_type", "clustering")
-        mlflow.set_tag("algorithm", "kmeans")
+        mlflow.set_tag("algorithm", "dbscan")
         mlflow.set_tag("dataset", "yugioh_cards")
         mlflow.set_tag("preprocessing", "pca")
         mlflow.set_tag("version", "v1.0")
@@ -84,10 +85,11 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
         mlflow.log_param("s3_bucket", S3_BUCKET)
         mlflow.log_param("s3_key", s3_key)
         mlflow.log_param("feature_type", feature_type)
-        mlflow.log_param("n_clusters", N_CLUSTERS)
+        mlflow.log_param("eps", EPS)
+        mlflow.log_param("min_samples", MIN_SAMPLES)
         mlflow.log_param("pca_components", PCA_COMPONENTS)
         mlflow.log_param("random_seed", RANDOM_SEED)
-        mlflow.log_param("archetype_min_count", ARCHETYPE_MIN_COUNT)
+        mlflow.log_param("archetype_min_count", 2)
         
         logging.info(f"Loading {feature_type} feature dataset from S3")
         df = read_parquet_from_s3(S3_BUCKET, s3_key)
@@ -116,14 +118,13 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
         logging.info(f"After filtering for numeric/boolean columns: {feature_df.shape}")
         logging.info(f"Feature columns included: {feature_df.columns[:10]}...")  # Show first 10 columns
 
-        # Convert to pandas ONLY for MLflow dataset logging (at the very end)
+        # Convert to pandas ONLY for MLflow dataset logging
         pandas_df = df.to_pandas()
         
         # Log dataset using MLflow Datasets with enhanced schema
         dataset_source = f"s3://{S3_BUCKET}/{s3_key}"
         
         # Categorize features by type for comprehensive schema
-        all_columns = df.columns
         text_features = [col for col in feature_df.columns if col.startswith(('desc_feat_', 'tfidf_feat_', 'embed_feat_'))]
         numeric_features = [col for col in feature_df.columns if col in ['atk', 'def', 'level', 'atk_norm', 'def_norm', 'level_norm']]
         categorical_features = [col for col in feature_df.columns if col not in text_features + numeric_features + meta_cols]
@@ -135,7 +136,7 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
             "feature_breakdown": {
                 "text_features": {
                     "count": len(text_features),
-                    "columns": text_features,  # First 10 for brevity
+                    "columns": text_features[:20],  # Limit for readability
                     "description": f"{feature_type} text features from card descriptions"
                 },
                 "numeric_features": {
@@ -145,7 +146,7 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
                 },
                 "categorical_features": {
                     "count": len(categorical_features),
-                    "columns": categorical_features,  # First 20 for brevity  
+                    "columns": categorical_features[:20],  # Limit for readability
                     "description": "One-hot encoded categorical features (type, attribute, archetype)"
                 }
             },
@@ -153,8 +154,7 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
             "total_features_used": len(feature_df.columns),
             "feature_type": feature_type,
             "feature_description": config["description"],
-            "processing_engine": "polars",
-            "dtypes_sample": {str(col): str(dtype) for col, dtype in list(zip(df.columns, df.dtypes))[:20]}
+            "processing_engine": "polars"
         }
         
         # Log enhanced schema information
@@ -165,44 +165,81 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
             pandas_df, 
             source=dataset_source,
             name=f"yugioh_cards_{feature_type}",
-            targets="archetype"  # String, not list
+            targets="archetype"
         )
         mlflow.log_input(dataset, context="training")
 
         # Use Polars DataFrame directly with scikit-learn (if supported)
-        # Convert to numpy only when necessary for sklearn operations
         try:
-            # Try to use Polars DataFrame directly with sklearn
             X = feature_df
             logging.info("Using Polars DataFrame directly with scikit-learn")
         except Exception as e:
-            # Fallback to numpy if Polars support isn't available
             logging.info("Converting to numpy array for scikit-learn compatibility")
             X = feature_df.to_numpy()
         
         # Log feature count after filtering
         mlflow.log_metric("num_features", X.shape[1])
 
+        # Apply PCA for dimensionality reduction before DBSCAN
         logging.info(f"Applying PCA to reduce to {PCA_COMPONENTS} components")
         pca = PCA(n_components=PCA_COMPONENTS, random_state=RANDOM_SEED)
         X_reduced = pca.fit_transform(X)
         logging.info(f"PCA complete. Reduced feature shape: {X_reduced.shape}")
 
-        logging.info(f"Running KMeans with {N_CLUSTERS} clusters")
-        kmeans = KMeans(n_clusters=N_CLUSTERS, random_state=RANDOM_SEED)
-        labels = kmeans.fit_predict(X_reduced)
+        # DBSCAN works better with standardized features
+        logging.info("Standardizing features for DBSCAN")
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_reduced)
+
+        logging.info(f"Running DBSCAN with eps={EPS}, min_samples={MIN_SAMPLES}")
+        dbscan = DBSCAN(eps=EPS, min_samples=MIN_SAMPLES)
+        labels = dbscan.fit_predict(X_scaled)
+
+        # Count clusters and noise points
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        n_noise = list(labels).count(-1)
+        
+        logging.info(f"Number of clusters: {n_clusters}")
+        logging.info(f"Number of noise points: {n_noise}")
+        
+        # Log cluster metrics
+        mlflow.log_metric("n_clusters_found", n_clusters)
+        mlflow.log_metric("n_noise_points", n_noise)
+        mlflow.log_metric("noise_percentage", n_noise / len(labels) * 100)
 
         meta_df = meta_df.with_columns(pl.Series(name="cluster", values=labels))
 
-        # Calculate and log metrics
-        if "archetype" in meta_df.columns:
-            score = adjusted_rand_score(meta_df["archetype"].to_list(), labels)
-            logging.info(f"Adjusted Rand Index (vs. archetype): {score:.4f}")
-            mlflow.log_metric("adjusted_rand_index", score)
+        # Calculate and log metrics (only if we have more than 1 cluster and not all noise)
+        if n_clusters > 1 and n_noise < len(labels):
+            if "archetype" in meta_df.columns:
+                # Filter out noise points for ARI calculation
+                non_noise_mask = labels != -1
+                if np.sum(non_noise_mask) > 0:
+                    archetype_labels = meta_df["archetype"].to_list()
+                    filtered_archetype = [archetype_labels[i] for i in range(len(archetype_labels)) if non_noise_mask[i]]
+                    filtered_cluster_labels = labels[non_noise_mask]
+                    
+                    score = adjusted_rand_score(filtered_archetype, filtered_cluster_labels)
+                    logging.info(f"Adjusted Rand Index (vs. archetype, excluding noise): {score:.4f}")
+                    mlflow.log_metric("adjusted_rand_index", score)
 
-        silhouette = silhouette_score(X_reduced, labels)
-        logging.info(f"Silhouette Score: {silhouette:.4f}")
-        mlflow.log_metric("silhouette_score", silhouette)
+            # Calculate silhouette score (excluding noise points)
+            if np.sum(labels != -1) > 1:
+                non_noise_indices = labels != -1
+                if len(set(labels[non_noise_indices])) > 1:  # Need at least 2 clusters
+                    silhouette = silhouette_score(X_scaled[non_noise_indices], labels[non_noise_indices])
+                    logging.info(f"Silhouette Score (excluding noise): {silhouette:.4f}")
+                    mlflow.log_metric("silhouette_score", silhouette)
+                else:
+                    logging.info("Only one cluster found (excluding noise), silhouette score not calculated")
+                    mlflow.log_metric("silhouette_score", 0.0)
+            else:
+                logging.info("All points classified as noise, silhouette score not calculated")
+                mlflow.log_metric("silhouette_score", 0.0)
+        else:
+            logging.info("No meaningful clusters found, skipping clustering metrics")
+            mlflow.log_metric("adjusted_rand_index", 0.0)
+            mlflow.log_metric("silhouette_score", 0.0)
 
         # Plot explained variance (scree plot)
         explained_var = pca.explained_variance_ratio_
@@ -227,47 +264,29 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
         logging.info(f"Total explained variance by {PCA_COMPONENTS} components: {explained_var.sum():.4f}")
 
         logging.info("Projecting to 2D using t-SNE...")
-        X_tsne = TSNE(n_components=2, perplexity=30, random_state=RANDOM_SEED).fit_transform(X_reduced)
+        X_tsne = TSNE(n_components=2, perplexity=30, random_state=RANDOM_SEED).fit_transform(X_scaled)
 
         # t-SNE plot as temporary file
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
             plt.figure(figsize=(10, 6))
-            scatter = plt.scatter(X_tsne[:, 0], X_tsne[:, 1], c=labels, cmap='tab10', s=10)
-
-            # Manually create legend based on unique cluster labels
+            
+            # Use a different colormap that handles -1 (noise) well
             unique_labels = np.unique(labels)
-            legend_patches = [mpatches.Patch(color=scatter.cmap(scatter.norm(i)), label=f"Cluster {i}") for i in unique_labels]
-            plt.legend(handles=legend_patches, title="Clusters", bbox_to_anchor=(1.05, 1), loc='upper left')
+            colors = plt.cm.tab10(np.linspace(0, 1, len(unique_labels)))
+            
+            for i, label in enumerate(unique_labels):
+                if label == -1:
+                    # Plot noise points in gray
+                    mask = labels == label
+                    plt.scatter(X_tsne[mask, 0], X_tsne[mask, 1], c='gray', s=10, alpha=0.6, label='Noise')
+                else:
+                    mask = labels == label
+                    plt.scatter(X_tsne[mask, 0], X_tsne[mask, 1], c=[colors[i]], s=10, label=f'Cluster {label}')
 
-            plt.title(f"t-SNE Projection of KMeans Clusters - {feature_type.upper()} Features")
+            plt.title(f"t-SNE Projection of DBSCAN Clusters - {feature_type.upper()} Features")
             plt.xlabel("t-SNE 1")
             plt.ylabel("t-SNE 2")
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight')
-            plt.close()
-            
-            # Log to MLflow and clean up
-            mlflow.log_artifact(tmp_file.name, "plots")
-            os.unlink(tmp_file.name)
-        
-        # Calculate elbow plot
-        inertias = []
-        k_values = range(2, 20)
-
-        for k in k_values:
-            kmeans_temp = KMeans(n_clusters=k, random_state=42)
-            kmeans_temp.fit(X_reduced)  # use PCA-reduced features
-            inertias.append(kmeans_temp.inertia_)
-            print(f"K: {k} -> WCSS: {kmeans_temp.inertia_}")
-
-        # Elbow plot as temporary file
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-            plt.figure(figsize=(8, 4))
-            plt.plot(k_values, inertias, marker='o')
-            plt.title(f"Elbow Plot: KMeans Inertia vs. Number of Clusters - {feature_type.upper()} Features")
-            plt.xlabel("Number of clusters (k)")
-            plt.ylabel("Inertia (WCSS)")
+            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
             plt.grid(True)
             plt.tight_layout()
             plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight')
@@ -278,20 +297,29 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
             os.unlink(tmp_file.name)
 
         logging.info("Example cards per cluster:")
-        for cluster_id in range(N_CLUSTERS):
-            logging.info(f"Cluster {cluster_id}:")
-            cluster_cards = meta_df.filter(pl.col("cluster") == cluster_id).head(5)
+        for cluster_id in sorted(set(labels)):
+            if cluster_id == -1:
+                logging.info(f"Noise points (cluster -1):")
+                cluster_cards = meta_df.filter(pl.col("cluster") == cluster_id).head(5)
+            else:
+                logging.info(f"Cluster {cluster_id}:")
+                cluster_cards = meta_df.filter(pl.col("cluster") == cluster_id).head(5)
+            
             for row in cluster_cards.iter_rows():
                 logging.info(f" - {row[1]} (Archetype: {row[2]})")
 
         # Create and log metrics as temporary file
         metrics = {
             "feature_type": feature_type,
-            "n_clusters": N_CLUSTERS,
+            "eps": EPS,
+            "min_samples": MIN_SAMPLES,
             "pca_components": PCA_COMPONENTS,
+            "n_clusters_found": int(n_clusters),
+            "n_noise_points": int(n_noise),
+            "noise_percentage": float(n_noise / len(labels) * 100),
             "explained_variance_ratio": float(explained_var.sum()),
-            "silhouette_score": float(silhouette),
-            "adjusted_rand_index": float(score) if "archetype" in meta_df.columns else None
+            "silhouette_score": float(silhouette) if 'silhouette' in locals() else 0.0,
+            "adjusted_rand_index": float(score) if 'score' in locals() else 0.0
         }
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
@@ -305,7 +333,7 @@ def run_clustering_experiment(feature_type: Literal["tfidf", "embeddings", "comb
         logging.info(f"MLflow run completed successfully for {feature_type} features")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run K-means clustering with different feature types")
+    parser = argparse.ArgumentParser(description="Run DBSCAN clustering with different feature types")
     parser.add_argument(
         "--feature-type", 
         type=str, 
@@ -319,14 +347,14 @@ def main():
     if args.feature_type == "all":
         # Run all three experiments
         for feature_type in ["tfidf", "embeddings", "combined"]:
-            logging.info(f"🚀 Starting {feature_type} clustering experiment...")
+            logging.info(f"🚀 Starting {feature_type} DBSCAN clustering experiment...")
             run_clustering_experiment(feature_type)
-            logging.info(f"✅ Completed {feature_type} clustering experiment")
+            logging.info(f"✅ Completed {feature_type} DBSCAN clustering experiment")
     else:
         # Run single experiment
-        logging.info(f"🚀 Starting {args.feature_type} clustering experiment...")
+        logging.info(f"🚀 Starting {args.feature_type} DBSCAN clustering experiment...")
         run_clustering_experiment(args.feature_type)
-        logging.info(f"✅ Completed {args.feature_type} clustering experiment")
+        logging.info(f"✅ Completed {args.feature_type} DBSCAN clustering experiment")
 
 
 if __name__ == "__main__":

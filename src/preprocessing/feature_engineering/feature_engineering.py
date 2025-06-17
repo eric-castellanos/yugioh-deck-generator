@@ -292,6 +292,9 @@ def create_feature_dataset(feature_type: Literal["tfidf", "embeddings", "combine
     # Collect to DataFrame for text feature processing
     df = lf.collect()
     
+    # Reduce archetype cardinality before creating dummies (only combine singletons)
+    df = reduce_archetype_cardinality(df, min_count=2)
+    
     # Add text features based on type
     if feature_type == "tfidf":
         df = add_tfidf_description_features(df, max_features=300, n_components=50)
@@ -357,6 +360,53 @@ def create_all_feature_datasets():
     
     return datasets
 
+
+def reduce_archetype_cardinality(df: pl.DataFrame, 
+                                min_count: int = 2) -> pl.DataFrame:
+    """
+    Reduce archetype cardinality by combining only singleton archetypes (those with 1 card)
+    into an 'Other' category. Keep all archetypes that have 2 or more cards.
+    
+    Parameters:
+    - df: Polars DataFrame with archetype column
+    - min_count: Minimum count required to keep an archetype (default: 2)
+    
+    Returns:
+    - Polars DataFrame with reduced archetype cardinality
+    """
+    # Get archetype value counts
+    archetype_counts = df["archetype"].value_counts().sort("count", descending=True)
+    
+    # Keep archetypes with at least min_count occurrences
+    keep_archetypes = archetype_counts.filter(
+        pl.col("count") >= min_count
+    )["archetype"].to_list()
+    
+    singleton_archetypes = archetype_counts.filter(
+        pl.col("count") < min_count
+    )
+    
+    logging.info(f"Original archetypes: {len(archetype_counts)}")
+    logging.info(f"Keeping {len(keep_archetypes)} archetypes with {min_count}+ cards")
+    logging.info(f"Combining {len(singleton_archetypes)} singleton archetypes into 'Other'")
+    logging.info(f"Cards affected: {singleton_archetypes['count'].sum()} cards will become 'Other'")
+    
+    # Replace singleton archetypes with 'Other'
+    df = df.with_columns(
+        pl.when(pl.col("archetype").is_in(keep_archetypes))
+        .then(pl.col("archetype"))
+        .otherwise(pl.lit("Other"))
+        .alias("archetype")
+    )
+    
+    # Log the final result
+    final_counts = df["archetype"].value_counts().sort("count", descending=True)
+    other_count = final_counts.filter(pl.col("archetype") == "Other")["count"].sum() or 0
+    
+    logging.info(f"Final unique archetypes: {len(final_counts)}")
+    logging.info(f"Cards in 'Other' category: {other_count}")
+    
+    return df
 
 if __name__ == "__main__":
     import argparse
