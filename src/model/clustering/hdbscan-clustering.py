@@ -43,9 +43,9 @@ mlflow.set_experiment("/yugioh_card_clustering")
 
 # Parameters
 S3_BUCKET = "yugioh-data"
-MIN_CLUSTER_SIZE = 5  # Minimum size of clusters
+MIN_CLUSTER_SIZE = 4  # Minimum size of clusters
 MIN_SAMPLES = 5  # Number of samples in a neighborhood for a point to be considered a core point
-CLUSTER_SELECTION_EPSILON = 0.1  # Distance threshold for cluster selection
+CLUSTER_SELECTION_EPSILON = 0.05  # Distance threshold for cluster selection
 PCA_COMPONENTS = 2
 UMAP_COMPONENTS = 2
 UMAP_N_NEIGHBORS = 15
@@ -54,10 +54,11 @@ RANDOM_SEED = 42
 
 # UMAP Hyperparameter Grid
 UMAP_GRID = [
-    {"n_neighbors": 10, "min_dist": 0.0, "n_components": 30},
-    {"n_neighbors": 15, "min_dist": 0.1, "n_components": 50},
-    {"n_neighbors": 30, "min_dist": 0.25, "n_components": 70},
-    {"n_neighbors": 50, "min_dist": 0.5, "n_components": 100},
+    #{"n_neighbors": 10, "min_dist": 0.0, "n_components": 30},
+    #{"n_neighbors": 15, "min_dist": 0.1, "n_components": 50},
+    #{"n_neighbors": 30, "min_dist": 0.25, "n_components": 70},
+    #{"n_neighbors": 50, "min_dist": 0.5, "n_components": 100},
+    {"n_neighbors": 30, "min_dist": 0.1, "n_components": 100},
 ]
 
 # Feature type to S3 key mapping
