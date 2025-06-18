@@ -21,7 +21,7 @@ from mlflow.data.pandas_dataset import PandasDataset
 #from kneed import KneeLocator
 
 from src.utils.s3_utils import read_parquet_from_s3
-from src.utils.clustering_metrics_summary import calculate_enhanced_clustering_metrics
+from utils.clustering.clustering_metrics_summary import calculate_enhanced_clustering_metrics
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
