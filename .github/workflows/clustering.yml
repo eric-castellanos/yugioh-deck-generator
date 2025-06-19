@@ -88,7 +88,7 @@ jobs:
 
       - name: Start MLflow service
         run: |
-          docker-compose -f docker-compose.local-mlflow.yml up -d mlflow-local
+          docker compose -f docker-compose.local-mlflow.yml up -d mlflow-local
           
           # Wait for MLflow to be ready
           echo "Waiting for MLflow to start..."
@@ -98,10 +98,10 @@ jobs:
       - name: Run clustering experiment
         run: |
           # Build clustering image
-          docker-compose -f docker-compose.local-mlflow.yml build clustering
+          docker compose -f docker-compose.local-mlflow.yml build clustering
           
           # Run clustering with matrix parameters
-          docker-compose -f docker-compose.local-mlflow.yml run --rm clustering \
+          docker compose -f docker-compose.local-mlflow.yml run --rm clustering \
             python src/model/clustering/hdbscan-clustering.py \
             --feature-type ${{ matrix.feature_type }} \
             --experiment-config ${{ matrix.config }} \
@@ -116,5 +116,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          docker-compose -f docker-compose.local-mlflow.yml down
+          docker compose -f docker-compose.local-mlflow.yml down
           docker system prune -f
