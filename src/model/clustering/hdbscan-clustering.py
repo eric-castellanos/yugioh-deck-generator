@@ -12,6 +12,7 @@ import tempfile
 import os
 import argparse
 import itertools
+from datetime import datetime
 from typing import Literal
 
 import boto3
@@ -19,11 +20,7 @@ import polars as pl
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-try:
-    import umap
-except ImportError:
-    raise ImportError("umap-learn is required. Install with: pip install umap-learn")
-
+import umap
 from sklearn.cluster import HDBSCAN
 from sklearn.metrics import silhouette_score, adjusted_rand_score
 from sklearn.decomposition import PCA
@@ -31,9 +28,6 @@ from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler, normalize
 import mlflow
 import mlflow.data
-
-import sys
-import os
 
 from src.utils.s3_utils import read_parquet_from_s3
 from src.utils.clustering.clustering_metrics_summary import calculate_enhanced_clustering_metrics
@@ -44,16 +38,31 @@ from src.utils.clustering.cluster_evaluation import (
     analyze_cluster_stats,
     evaluate_clustering_results
 )
+from src.utils.mlflow.mlflow_utils import (
+    setup_clustering_experiment,
+    log_clustering_tags,
+    log_clustering_params,
+    log_essential_clustering_metrics,
+    log_dataset_info,
+    save_clustering_artifacts,
+    register_best_clustering_model,
+    get_best_clustering_run,
+    log_dataset_with_schema,
+    log_clustering_model_and_artifacts,
+    create_and_log_visualization_plots,
+    determine_if_final_model,
+    create_condensed_cluster_analysis
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Configure MLflow tracking server
-mlflow.set_tracking_uri("http://localhost:5000")
-mlflow.set_experiment("/yugioh_card_clustering")
+setup_clustering_experiment()  # Use utility function instead
 
 # Parameters
 S3_BUCKET = "yugioh-data"
+MONTH_STR = datetime.today().strftime('%Y-%m')
 MIN_CLUSTER_SIZE = 4  # Minimum size of clusters
 MIN_SAMPLES = 3  # Number of samples in a neighborhood for a point to be considered a core point
 CLUSTER_SELECTION_EPSILON = 0.1  # Distance threshold for cluster selection
@@ -89,17 +98,17 @@ HDBSCAN_GRID = [
 # Feature type to S3 key mapping
 FEATURE_CONFIGS = {
     "tfidf": {
-        "s3_key": "processed/feature_engineered/2025-06/feature_engineered_tfidf.parquet",
+        "s3_key": f"processed/feature_engineered/{MONTH_STR}/feature_engineered_tfidf.parquet",
         "description": "TF-IDF features only from card descriptions",
         "feature_prefix": "desc_feat_"
     },
     "embeddings": {
-        "s3_key": "processed/feature_engineered/2025-06/feature_engineered_embeddings.parquet", 
+        "s3_key": f"processed/feature_engineered/{MONTH_STR}/feature_engineered_embeddings.parquet", 
         "description": "Word embedding features only from card descriptions",
         "feature_prefix": "embed_feat_"
     },
     "combined": {
-        "s3_key": "processed/feature_engineered/2025-06/feature_engineered_combined.parquet",
+        "s3_key": f"processed/feature_engineered/{MONTH_STR}/feature_engineered_combined.parquet",
         "description": "Combined TF-IDF and word embedding features from card descriptions", 
         "feature_prefix": ["tfidf_feat_", "embed_feat_"]
     }
@@ -110,7 +119,8 @@ def run_enhanced_hdbscan_experiment(
     feature_type: Literal["tfidf", "embeddings", "combined"],
     experiment_config: str,
     umap_params: dict = None,
-    hdbscan_params: dict = None
+    hdbscan_params: dict = None,
+    force_register: bool = False
 ):
     """
     Run enhanced HDBSCAN clustering experiment with specified feature type and configuration.
@@ -168,24 +178,19 @@ def run_enhanced_hdbscan_experiment(
     
     # Start MLflow run
     with mlflow.start_run():
-        # Set tags for easy querying and organization
-        mlflow.set_tag("model_type", "clustering")
-        mlflow.set_tag("algorithm", "hdbscan_enhanced")
-        mlflow.set_tag("dataset", "yugioh_cards")
-        mlflow.set_tag("preprocessing", experiment_config)
-        mlflow.set_tag("version", "v2.0")
-        mlflow.set_tag("purpose", "card_clustering")
-        mlflow.set_tag("data_source", "s3")
-        mlflow.set_tag("stage", "exploration")
-        mlflow.set_tag("distance_metric", metric)
-        mlflow.set_tag("experiment_config", experiment_config)
-
-        # Feature-specific tags
-        mlflow.set_tag("feature_type", feature_type)
-        mlflow.set_tag("feature_description", config["description"])
-        mlflow.set_tag("config_description", config_description)
+        # Log standard clustering tags
+        log_clustering_tags(
+            algorithm="hdbscan_enhanced",
+            feature_type=feature_type,
+            experiment_config=experiment_config,
+            stage="exploration",
+            version="v2.0",
+            distance_metric=metric,
+            feature_description=config["description"],
+            config_description=config_description
+        )
         
-        # Log parameters - use grid search parameters if provided
+        # Determine actual parameter values (use grid search if provided)
         if hdbscan_params is not None:
             actual_min_cluster_size = hdbscan_params["min_cluster_size"]
             actual_min_samples = hdbscan_params["min_samples"]
@@ -194,45 +199,66 @@ def run_enhanced_hdbscan_experiment(
             actual_min_cluster_size = MIN_CLUSTER_SIZE
             actual_min_samples = MIN_SAMPLES
             actual_cluster_selection_epsilon = CLUSTER_SELECTION_EPSILON
-            
-        mlflow.log_param("s3_bucket", S3_BUCKET)
-        mlflow.log_param("s3_key", s3_key)
-        mlflow.log_param("feature_type", feature_type)
-        mlflow.log_param("experiment_config", experiment_config)
-        mlflow.log_param("min_cluster_size", actual_min_cluster_size)
-        mlflow.log_param("min_samples", actual_min_samples)
-        mlflow.log_param("cluster_selection_epsilon", actual_cluster_selection_epsilon)
-        mlflow.log_param("random_seed", RANDOM_SEED)
-        mlflow.log_param("metric", metric)
-        mlflow.log_param("use_pca", use_pca)
-        mlflow.log_param("use_umap", use_umap)
-        mlflow.log_param("use_l2_norm", use_l2_norm)
         
+        # Prepare algorithm parameters
+        algorithm_params = {
+            "min_cluster_size": actual_min_cluster_size,
+            "min_samples": actual_min_samples,
+            "cluster_selection_epsilon": actual_cluster_selection_epsilon,
+            "random_seed": RANDOM_SEED,
+            "metric": metric
+        }
+        
+        # Prepare preprocessing parameters
+        preprocessing_params = {
+            "use_pca": use_pca,
+            "use_umap": use_umap,
+            "use_l2_norm": use_l2_norm
+        }
+        
+        # Add PCA/UMAP specific parameters
         if use_pca:
             components_to_use = locals().get('pca_components_override', PCA_COMPONENTS)
-            mlflow.log_param("pca_components", components_to_use)
+            preprocessing_params["pca_components"] = components_to_use
         if use_umap:
             if umap_params is not None:
-                mlflow.log_param("umap_components", umap_params["n_components"])
-                mlflow.log_param("umap_n_neighbors", umap_params["n_neighbors"])
-                mlflow.log_param("umap_min_dist", umap_params["min_dist"])
+                preprocessing_params.update({
+                    "umap_components": umap_params["n_components"],
+                    "umap_n_neighbors": umap_params["n_neighbors"],
+                    "umap_min_dist": umap_params["min_dist"]
+                })
             else:
-                mlflow.log_param("umap_components", UMAP_COMPONENTS)
-                mlflow.log_param("umap_n_neighbors", UMAP_N_NEIGHBORS)
-                mlflow.log_param("umap_min_dist", UMAP_MIN_DIST)
+                preprocessing_params.update({
+                    "umap_components": UMAP_COMPONENTS,
+                    "umap_n_neighbors": UMAP_N_NEIGHBORS,
+                    "umap_min_dist": UMAP_MIN_DIST
+                })
+        
+        # Log all parameters using utility function
+        log_clustering_params(
+            s3_bucket=S3_BUCKET,
+            s3_key=s3_key,
+            algorithm_params=algorithm_params,
+            preprocessing_params=preprocessing_params,
+            feature_type=feature_type,
+            experiment_config=experiment_config
+        )
         
         logging.info(f"Loading {feature_type} feature dataset from S3")
         df = read_parquet_from_s3(S3_BUCKET, s3_key)
         
         # Keep processing in Polars for efficiency
-        meta_cols = ["id", "name", "archetype"]
-        meta_df = df.select(meta_cols)
-        feature_df = df.drop(meta_cols)
+        # Include key metadata columns for cluster analysis (preserving original categorical info)
+        potential_meta_cols = ["id", "name", "archetype", "type", "attribute"]
+        available_meta_cols = [col for col in potential_meta_cols if col in df.columns]
+        meta_df = df.select(available_meta_cols) if available_meta_cols else df.select(["id", "name"])
+        feature_df = df.drop(available_meta_cols)
 
         logging.info(f"Data loaded. Original feature shape: {feature_df.shape}")
         
-        # Log dataset metrics
-        mlflow.log_metric("num_samples", len(df))
+        # Remove the individual metric logging - these are now logged by the utility function
+        # mlflow.log_metric("num_samples", len(df))  # Moved to utility function
+        pass
 
         # Drop non-numeric columns
         feature_df = feature_df.select([
@@ -249,56 +275,17 @@ def run_enhanced_hdbscan_experiment(
         # Convert to pandas for MLflow dataset logging
         pandas_df = df.to_pandas()
         
-        # Log dataset using MLflow Datasets with enhanced schema
-        dataset_source = f"s3://{S3_BUCKET}/{s3_key}"
-        
-        # Categorize features by type for comprehensive schema
-        all_columns = df.columns
-        text_features = [col for col in feature_df.columns if col.startswith(('desc_feat_', 'tfidf_feat_', 'embed_feat_'))]
-        numeric_features = [col for col in feature_df.columns if col in ['atk', 'def', 'level', 'atk_norm', 'def_norm', 'level_norm']]
-        categorical_features = [col for col in feature_df.columns if col not in text_features + numeric_features + meta_cols]
-        
-        # Create detailed schema information
-        schema_info = {
-            "num_rows": len(df),
-            "num_columns": len(df.columns),
-            "feature_breakdown": {
-                "text_features": {
-                    "count": len(text_features),
-                    "columns": text_features[:20],  # First 20 for brevity
-                    "description": f"{feature_type} text features from card descriptions"
-                },
-                "numeric_features": {
-                    "count": len(numeric_features),
-                    "columns": numeric_features,
-                    "description": "Normalized card stats (attack, defense, level)"
-                },
-                "categorical_features": {
-                    "count": len(categorical_features),
-                    "columns": categorical_features[:20],  # First 20 for brevity  
-                    "description": "One-hot encoded categorical features (type, attribute, archetype)"
-                }
-            },
-            "metadata_columns": meta_cols,
-            "total_features_used": len(feature_df.columns),
-            "feature_type": feature_type,
-            "feature_description": config["description"],
-            "processing_engine": "polars",
-            "experiment_config": experiment_config,
-            "dtypes_sample": {str(col): str(dtype) for col, dtype in list(zip(df.columns, df.dtypes))[:20]}
-        }
-        
-        # Log enhanced schema information
-        mlflow.log_dict(schema_info, "dataset_schema.json")
-        
-        # Create MLflow dataset (pandas required here)
-        dataset = mlflow.data.from_pandas(
-            pandas_df, 
-            source=dataset_source,
-            name=f"yugioh_cards_{feature_type}_{experiment_config}",
-            targets="archetype"  # String, not list
+        # Log dataset using enhanced utility function
+        log_dataset_with_schema(
+            pandas_df=pandas_df,
+            feature_df=feature_df,
+            s3_bucket=S3_BUCKET,
+            s3_key=s3_key,
+            feature_type=feature_type,
+            experiment_config=experiment_config,
+            available_meta_cols=available_meta_cols,
+            config=config
         )
-        mlflow.log_input(dataset, context="training")
         
         # Get feature matrix as numpy array for scikit-learn
         X = feature_df.to_numpy()
@@ -531,10 +518,15 @@ def run_enhanced_hdbscan_experiment(
             logging.info("No meaningful clusters found, skipping standard clustering metrics")
             mlflow.log_metric("silhouette_score", 0.0)
 
-        # Create and save visualizations
-        create_visualizations(
-            X_final, labels, feature_type, experiment_config, 
-            reducer, explained_variance, clusterer
+        # Create and log visualization plots using utility function
+        plot_paths = create_and_log_visualization_plots(
+            X_final=X_final,
+            labels=labels,
+            feature_type=feature_type,
+            experiment_config=experiment_config,
+            reducer=reducer,
+            explained_variance=explained_variance,
+            clusterer=clusterer
         )
 
         # Log example cards per cluster
@@ -560,6 +552,7 @@ def run_enhanced_hdbscan_experiment(
             "cluster_selection_epsilon": actual_cluster_selection_epsilon,
             "metric": metric,
             "n_clusters_found": int(n_clusters),
+            "total_clusters": int(n_clusters),  # Add this for consistency with determine_if_final_model
             "n_noise_points": int(n_noise),
             "noise_percentage": float(n_noise / len(labels) * 100),
             "silhouette_score": float(silhouette) if 'silhouette' in locals() else 0.0,
@@ -603,14 +596,7 @@ def run_enhanced_hdbscan_experiment(
                 )
                 
                 # Create a condensed version of cluster evaluation
-                condensed_evaluation = create_condensed_cluster_analysis(cluster_evaluation)
-                
-                # Save condensed cluster evaluation as artifact
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
-                    json.dump(condensed_evaluation, tmp_file, indent=2)
-                    tmp_file.flush()
-                    mlflow.log_artifact(tmp_file.name, "cluster_analysis")
-                    os.unlink(tmp_file.name)
+                condensed_evaluation = create_condensed_cluster_analysis(cluster_evaluation, labels)
                 
                 # Add summary of cluster evaluation to metrics summary
                 metrics_summary["cluster_evaluation_summary"] = {
@@ -620,90 +606,40 @@ def run_enhanced_hdbscan_experiment(
                     "has_cluster_stats": len(cluster_evaluation.get('cluster_stats', {})) > 0
                 }
                 
-                logging.info("Condensed cluster evaluation saved as artifact")
+                logging.info("Cluster evaluation completed")
                 
             except Exception as e:
-                logging.warning(f"Could not save detailed cluster evaluation: {e}")
+                logging.warning(f"Could not complete cluster evaluation: {e}")
                 metrics_summary["cluster_evaluation_summary"] = {"error": str(e)}
+                condensed_evaluation = None
+        else:
+            condensed_evaluation = None
 
-        # Save metrics summary
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
-            json.dump(metrics_summary, tmp_file, indent=2)
-            tmp_file.flush()
-            mlflow.log_artifact(tmp_file.name, "metrics")
-            os.unlink(tmp_file.name)
+        # Determine if this should be the final registered model
+        run_metrics = {
+            'silhouette_score': metrics_summary.get('silhouette_score', 0),
+            'total_clusters': metrics_summary.get('total_clusters', 0),
+            'noise_percentage': metrics_summary.get('noise_percentage', 100),
+            'feature_type': feature_type
+        }
+        
+        should_register = determine_if_final_model(run_metrics) or force_register
+        
+        # Log clustering model and artifacts using utility function
+        model_uri = log_clustering_model_and_artifacts(
+            clusterer=clusterer,
+            metrics_summary=metrics_summary,
+            cluster_evaluation=condensed_evaluation,  # Pass the condensed version
+            plot_paths=plot_paths,
+            register_model=should_register,
+            model_name="yugioh_clustering_final_model"
+        )
+        
+        if model_uri:
+            logging.info(f"✅ Final model registered in MLflow Model Registry: {model_uri}")
         
         logging.info(f"Enhanced HDBSCAN run completed successfully for {feature_type} features with {experiment_config}")
 
-
-def create_visualizations(X_final, labels, feature_type, experiment_config, reducer, explained_variance, clusterer):
-    """Create and log visualization plots."""
-    
-    # Create dimensionality reduction plot if applicable
-    if explained_variance is not None:  # PCA case
-        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-            plt.figure(figsize=(10, 5))
-            plt.plot(range(1, len(explained_variance) + 1), explained_variance.cumsum(), marker='o')
-            plt.xlabel("Number of Components")
-            plt.ylabel("Cumulative Explained Variance")
-            plt.title(f"Scree Plot (PCA) - {feature_type.upper()} Features - {experiment_config}")
-            plt.grid(True)
-            plt.tight_layout()
-            plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight')
-            plt.close()
-            mlflow.log_artifact(tmp_file.name, "plots")
-            os.unlink(tmp_file.name)
-
-    # Create cluster hierarchy plot (HDBSCAN-specific)
-    # Note: sklearn's HDBSCAN may have different attributes than hdbscan package
-    try:
-        if hasattr(clusterer, 'condensed_tree_') and clusterer.condensed_tree_ is not None:
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-                plt.figure(figsize=(12, 8))
-                clusterer.condensed_tree_.plot(select_clusters=True, selection_palette='viridis')
-                plt.title(f"HDBSCAN Cluster Hierarchy - {feature_type.upper()} Features - {experiment_config}")
-                plt.tight_layout()
-                plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight')
-                plt.close()
-                mlflow.log_artifact(tmp_file.name, "plots")
-                os.unlink(tmp_file.name)
-        else:
-            logging.info("Cluster hierarchy plot not available with sklearn's HDBSCAN")
-    except Exception as e:
-        logging.warning(f"Could not create cluster hierarchy plot: {e}")
-
-    # Create t-SNE visualization for high-dimensional data
-    if X_final.shape[1] > 2:
-        logging.info("Projecting to 2D using t-SNE for visualization...")
-        X_tsne = TSNE(n_components=2, perplexity=30, random_state=RANDOM_SEED).fit_transform(X_final)
-    else:
-        X_tsne = X_final
-
-    # t-SNE/2D cluster plot
-    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-        plt.figure(figsize=(12, 8))
-        
-        unique_labels = np.unique(labels)
-        colors = plt.cm.tab10(np.linspace(0, 1, len(unique_labels)))
-        
-        for i, label in enumerate(unique_labels):
-            if label == -1:
-                mask = labels == label
-                plt.scatter(X_tsne[mask, 0], X_tsne[mask, 1], c='gray', s=10, alpha=0.6, label='Noise')
-            else:
-                mask = labels == label
-                plt.scatter(X_tsne[mask, 0], X_tsne[mask, 1], c=[colors[i]], s=10, label=f'Cluster {label}')
-
-        plt.title(f"HDBSCAN Clusters - {feature_type.upper()} Features - {experiment_config}")
-        plt.xlabel("Component 1" if X_final.shape[1] <= 2 else "t-SNE 1")
-        plt.ylabel("Component 2" if X_final.shape[1] <= 2 else "t-SNE 2")
-        # Legend removed for HDBSCAN due to large number of clusters
-        plt.grid(True)
-        plt.tight_layout()
-        plt.savefig(tmp_file.name, dpi=300, bbox_inches='tight')
-        plt.close()
-        mlflow.log_artifact(tmp_file.name, "plots")
-        os.unlink(tmp_file.name)
 
 
 def run_combined_grid_search(feature_type: Literal["tfidf", "embeddings", "combined"]):
@@ -762,91 +698,6 @@ def run_umap_grid_search(feature_type: Literal["tfidf", "embeddings", "combined"
     logging.info(f"🎯 Completed UMAP grid search for {feature_type} features")
 
 
-def create_condensed_cluster_analysis(cluster_evaluation):
-    """
-    Create a condensed version of cluster evaluation to reduce file size.
-    
-    Args:
-        cluster_evaluation: Full cluster evaluation results
-        
-    Returns:
-        Condensed version with only key information (JSON serializable)
-    """
-    def convert_to_json_serializable(obj):
-        """Convert numpy types to native Python types for JSON serialization."""
-        if isinstance(obj, (np.integer, np.int64)):
-            return int(obj)
-        elif isinstance(obj, (np.floating, np.float64)):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, dict):
-            return {str(k): convert_to_json_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [convert_to_json_serializable(item) for item in obj]
-        else:
-            return obj
-    
-    # Convert summary stats to ensure JSON serialization
-    summary_stats = convert_to_json_serializable(cluster_evaluation.get('summary_stats', {}))
-    
-    condensed = {
-        'summary_stats': summary_stats,
-        'clusters': {}
-    }
-    
-    # Get all cluster data
-    top_features = cluster_evaluation.get('top_features', {})
-    representative_cards = cluster_evaluation.get('representative_cards', {})
-    archetype_dist = cluster_evaluation.get('archetype_distribution', {})
-    cluster_stats = cluster_evaluation.get('cluster_stats', {})
-    
-    # Process each cluster
-    for cluster_id in top_features.keys():
-        cluster_info = {
-            'size': 0,  # Will be calculated from representative cards
-            'top_features': top_features.get(cluster_id, [])[:5],  # Limit to top 5 features
-            'representative_cards': [],
-            'top_archetypes': [],
-            'avg_stats': {}
-        }
-        
-        # Add representative cards (limit to top 3, with essential info only)
-        rep_cards = representative_cards.get(cluster_id, [])
-        cluster_info['size'] = len(rep_cards) if rep_cards else 0
-        for card in rep_cards[:3]:
-            condensed_card = {
-                'name': str(card.get('name', '')),
-                'similarity': round(float(card.get('similarity_to_centroid', 0)), 3)
-            }
-            # Add key attributes if available
-            for attr in ['archetype', 'type']:
-                if attr in card:
-                    condensed_card[attr] = str(card[attr])
-            cluster_info['representative_cards'].append(condensed_card)
-        
-        # Add top 3 archetypes with percentages
-        arch_dist_cluster = archetype_dist.get(cluster_id, {})
-        if arch_dist_cluster:
-            sorted_archetypes = sorted(arch_dist_cluster.items(), key=lambda x: x[1], reverse=True)[:3]
-            cluster_info['top_archetypes'] = [
-                {'archetype': str(arch), 'percentage': round(float(pct) * 100, 1)} 
-                for arch, pct in sorted_archetypes
-            ]
-        
-        # Add simplified cluster stats (averages only)
-        stats = cluster_stats.get(cluster_id, {})
-        if stats:
-            cluster_info['avg_stats'] = {
-                str(col): round(float(val), 1) for col, val in stats.items() 
-                if col in ['atk', 'def', 'level'] and not (isinstance(val, float) and np.isnan(val))
-            }
-        
-        condensed['clusters'][str(cluster_id)] = cluster_info
-    
-    return condensed
-
-
 def main():
     parser = argparse.ArgumentParser(description="Run enhanced HDBSCAN clustering experiments")
     parser.add_argument(
@@ -862,6 +713,11 @@ def main():
         choices=["pca_euclidean", "umap_euclidean", "umap_grid_search", "combined_grid_search", "all"],
         default="all",
         help="Experiment configuration to run (default: all)"
+    )
+    parser.add_argument(
+        "--force-register",
+        action="store_true",
+        help="Force register the model regardless of quality criteria"
     )
     
     args = parser.parse_args()
@@ -904,7 +760,7 @@ def main():
     for config in configs:
         for feature_type in feature_types:
             logging.info(f"🚀 Starting enhanced HDBSCAN experiment: {feature_type} features with {config}")
-            run_enhanced_hdbscan_experiment(feature_type, config)
+            run_enhanced_hdbscan_experiment(feature_type, config, force_register=args.force_register)
             logging.info(f"✅ Completed enhanced HDBSCAN experiment: {feature_type} features with {config}")
 
 

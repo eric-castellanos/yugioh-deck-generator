@@ -107,25 +107,27 @@ def drop_columns(
 
 def cats_to_dummies_eager(df : pl.DataFrame) -> pl.DataFrame:
     """
-    Converts all categorical columns in the given Polars DataFrame into one-hot encoded columns.
+    Converts all categorical columns in the given Polars DataFrame into one-hot encoded columns
+    while preserving the original categorical columns for cluster analysis.
 
     Parameters:
     - df: Polars DataFrame with categorical columns
 
     Returns:
-    - Polars DataFrame with one-hot encoded columns replacing the original categoricals
+    - Polars DataFrame with one-hot encoded columns added alongside original categoricals
     """
     # Identify all categorical columns
     cat_cols = [col for col in df.columns if df[col].dtype == pl.Categorical]
 
-    # Split: keep 'archetype', drop others
-    cat_cols_to_drop = [col for col in cat_cols if col != "archetype"]
+    # Preserve original categorical columns for metadata (type, attribute, archetype)
+    preserve_cols = ["type", "attribute", "archetype"]
+    cat_cols_to_drop = [col for col in cat_cols if col not in preserve_cols]
 
-    # One-hot encode all categorical columns (including 'archetype')
+    # One-hot encode all categorical columns
     df_dummies = df.select(cat_cols).to_dummies()
 
-    # Drop all categorical cols except 'archetype'
-    df_base = df.drop(cat_cols_to_drop)
+    # Drop only categorical columns that are not in our preserve list
+    df_base = df.drop(cat_cols_to_drop) if cat_cols_to_drop else df
 
     # Combine
     return df_base.hstack(df_dummies)
@@ -319,7 +321,7 @@ def create_feature_dataset(feature_type: Literal["tfidf", "embeddings", "combine
     
     # Log dataset info
     logging.info(f"Final dataset shape: {df.shape}")
-    logging.info(f"Feature columns: {[col for col in df.columns if col not in ['id', 'name', 'archetype']]}")
+    logging.info(f"Feature columns: {[col for col in df.columns if col not in ['id', 'name', 'archetype', 'type', 'attribute']]}")
     
     # Write to S3
     buffer = io.BytesIO()

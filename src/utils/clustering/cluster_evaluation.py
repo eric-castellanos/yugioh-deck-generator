@@ -252,28 +252,31 @@ def print_cluster_analysis_summary(
     print("CLUSTER ANALYSIS SUMMARY")
     print("=" * 60)
     
-    # Basic cluster info
-    unique_clusters = np.unique(labels)
-    n_clusters = len(unique_clusters) - (1 if -1 in unique_clusters else 0)
-    n_noise = np.sum(labels == -1) if -1 in unique_clusters else 0
-    
-    print(f"Number of clusters: {n_clusters}")
-    print(f"Number of noise points: {n_noise}")
-    print(f"Total points: {len(labels)}")
-    
-    # Analyze each cluster
-    top_features = analyze_cluster_top_features(X, labels, top_features, feature_names)
+    # Get analysis results
+    top_features_dict = analyze_cluster_top_features(X, labels, top_features, feature_names)
     representative_cards = find_cluster_representative_cards(X, labels, card_data, top_cards)
     archetype_dist = analyze_archetype_distribution(labels, card_data)
     cluster_stats = analyze_cluster_stats(labels, card_data)
     
-    for cluster_id in sorted([c for c in unique_clusters if c != -1]):
-        print(f"\n--- CLUSTER {cluster_id} ---")
-        print(f"Size: {np.sum(labels == cluster_id)} cards")
+    # Overall statistics
+    unique_labels = np.unique(labels)
+    n_clusters = len([label for label in unique_labels if label != -1])
+    n_noise = np.sum(labels == -1) if -1 in labels else 0
+    
+    print(f"Total clusters: {n_clusters}")
+    print(f"Noise points: {n_noise} ({n_noise/len(labels)*100:.1f}%)")
+    print()
+    
+    # Per-cluster analysis
+    for cluster_id in sorted([label for label in unique_labels if label != -1]):
+        print(f"--- CLUSTER {cluster_id} ---")
+        cluster_size = np.sum(labels == cluster_id)
+        print(f"Size: {cluster_size} cards ({cluster_size/len(labels)*100:.1f}%)")
         
         # Top features
-        if cluster_id in top_features:
-            print(f"Top features: {top_features[cluster_id][:5]}")
+        if cluster_id in top_features_dict:
+            features = top_features_dict[cluster_id][:5]  # Show top 5
+            print(f"Top features: {features}")
         
         # Representative cards
         if cluster_id in representative_cards:
