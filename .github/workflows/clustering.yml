@@ -209,9 +209,19 @@ jobs:
           RETRY_COUNT=0
           
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if curl -f -s http://localhost:5000/api/2.0/mlflow/experiments/search >/dev/null 2>&1; then
-              echo "MLflow API test passed!"
-              break
+            # First try a simpler endpoint to check if MLflow is responding
+            if curl -f -s "http://localhost:5000/version" >/dev/null 2>&1; then
+              echo "MLflow version endpoint responded successfully!"
+              
+              # Now test the experiments endpoint
+              if curl -f -s "http://localhost:5000/api/2.0/mlflow/experiments/search?max_results=1" >/dev/null 2>&1; then
+                echo "MLflow API test passed!"
+                break
+              else
+                echo "Experiments API not ready yet..."
+              fi
+            else
+              echo "MLflow version endpoint not responding yet..."
             fi
             
             RETRY_COUNT=$((RETRY_COUNT + 1))
@@ -222,7 +232,11 @@ jobs:
           if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
             echo "MLflow API test failed after $MAX_RETRIES attempts"
             echo "Trying to get more details..."
-            curl -v http://localhost:5000/api/2.0/mlflow/experiments/search || true
+            echo "Testing version endpoint:"
+            curl -v "http://localhost:5000/version" || true
+            echo ""
+            echo "Testing experiments endpoint:"
+            curl -v "http://localhost:5000/api/2.0/mlflow/experiments/search?max_results=1" || true
             echo "Container logs:"
             docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=30
             exit 1
@@ -261,8 +275,21 @@ jobs:
       - name: Check MLflow experiments
         if: always()
         run: |
-          echo "Checking MLflow experiments..."
-          curl -s http://localhost:5000/api/2.0/mlflow/experiments/search | jq '.'
+          echo "Checking MLflow experiments and overall health..."
+          
+          echo "1. Testing basic connectivity:"
+          curl -s http://localhost:5000/ | head -5 || echo "Root endpoint failed"
+          
+          echo "2. Testing MLflow version:"
+          curl -s http://localhost:5000/version || echo "Version endpoint failed"
+          
+          echo "3. Testing experiments list:"
+          curl -s "http://localhost:5000/api/2.0/mlflow/experiments/search?max_results=5" | jq '.' || echo "Experiments endpoint failed"
+          
+          echo "4. Testing experiment creation (should work):"
+          curl -s -X POST "http://localhost:5000/api/2.0/mlflow/experiments/create" \
+            -H "Content-Type: application/json" \
+            -d '{"name": "test-experiment-'$(date +%s)'"}' | jq '.' || echo "Experiment creation failed"
 
       - name: Cleanup
         if: always()
