@@ -95,12 +95,13 @@ services:
     environment:
       - MLFLOW_TRACKING_URI=http://localhost:5000
       - MLFLOW_EXPERIMENT_NAME=/yugioh_card_clustering
-      - AWS_REGION=us-east-1
-      - AWS_PROFILE=${AWS_PROFILE}
+      - AWS_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
       - S3_BUCKET=${S3_BUCKET}
     volumes:
       - .:/workspace
-      - ~/.aws:/root/.aws:ro  # Mount AWS credentials
     working_dir: /workspace
     command: ["python", "src/model/clustering/hdbscan-clustering.py", "--feature-type", "combined", "--experiment-config", "combined_grid_search"]
 

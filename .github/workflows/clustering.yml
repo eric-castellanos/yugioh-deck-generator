@@ -84,7 +84,9 @@ jobs:
           echo "MLFLOW_DB_PASSWORD=${{ secrets.MLFLOW_DB_PASSWORD }}" >> $GITHUB_ENV
           echo "RDS_ENDPOINT=${{ steps.infra-info.outputs.rds_endpoint }}" >> $GITHUB_ENV
           echo "S3_BUCKET=${{ steps.infra-info.outputs.s3_bucket }}" >> $GITHUB_ENV
-          echo "AWS_PROFILE=default" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ secrets.AWS_DEFAULT_REGION }}" >> $GITHUB_ENV
 
       - name: Start MLflow service
         run: |
