@@ -19,6 +19,7 @@ services:
     working_dir: /workspace
     command: >
       bash -c "
+        apt-get update && apt-get install -y curl &&
         pip install --no-cache-dir mlflow==2.8.1 psycopg2-binary boto3 awscli &&
         echo 'Starting MLflow server connected to AWS resources...' &&
         mlflow server \
@@ -28,6 +29,12 @@ services:
           --port 5000 \
           --gunicorn-opts '--timeout=120 --workers=2'
       "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     # No networks section when using host networking
 
   # Optional: Local PostgreSQL for offline development
