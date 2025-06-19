@@ -1,0 +1,120 @@
+name: HDBSCAN Clustering Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_type:
+        description: 'Feature type to use'
+        required: true
+        default: 'combined'
+        type: choice
+        options:
+        - tfidf
+        - embeddings  
+        - combined
+        - all
+      experiment_config:
+        description: 'Experiment configuration'
+        required: true
+        default: 'combined_grid_search'
+        type: choice
+        options:
+        - pca_euclidean
+        - umap_euclidean
+        - combined_grid_search
+        - all
+      force_register:
+        description: 'Force register model regardless of criteria'
+        required: false
+        default: false
+        type: boolean
+
+  push:
+    branches:
+      - feature/clustering_model
+    paths:
+      - 'src/model/clustering/**'
+      - 'src/utils/clustering/**'
+      - 'src/utils/mlflow/**'
+
+  pull_request:
+    paths:
+      - 'src/model/clustering/**'
+      - 'src/utils/clustering/**'
+      - 'src/utils/mlflow/**'
+
+jobs:
+  clustering:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature_type: ${{ github.event.inputs.feature_type && fromJson(format('["{0}"]', github.event.inputs.feature_type)) || fromJson('["combined"]') }}
+        config: ${{ github.event.inputs.experiment_config && fromJson(format('["{0}"]', github.event.inputs.experiment_config)) || fromJson('["pca_euclidean"]') }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Get infrastructure information
+        id: infra-info
+        run: |
+          # Get RDS endpoint
+          RDS_ENDPOINT=$(aws rds describe-db-instances \
+            --db-instance-identifier mlflow-db-dev \
+            --query 'DBInstances[0].Endpoint.Address' \
+            --output text 2>/dev/null || echo "")
+          
+          # Get S3 bucket name  
+          S3_BUCKET=$(aws s3api list-buckets \
+            --query 'Buckets[?contains(Name, `yugioh`)].Name' \
+            --output text 2>/dev/null || echo "yugioh-deck-generator")
+          
+          echo "rds_endpoint=${RDS_ENDPOINT}" >> $GITHUB_OUTPUT
+          echo "s3_bucket=${S3_BUCKET}" >> $GITHUB_OUTPUT
+
+      - name: Set up environment variables
+        run: |
+          echo "MLFLOW_DB_PASSWORD=${{ secrets.MLFLOW_DB_PASSWORD }}" >> $GITHUB_ENV
+          echo "RDS_ENDPOINT=${{ steps.infra-info.outputs.rds_endpoint }}" >> $GITHUB_ENV
+          echo "S3_BUCKET=${{ steps.infra-info.outputs.s3_bucket }}" >> $GITHUB_ENV
+          echo "AWS_PROFILE=default" >> $GITHUB_ENV
+
+      - name: Start MLflow service
+        run: |
+          docker-compose -f docker-compose.local-mlflow.yml up -d mlflow-local
+          
+          # Wait for MLflow to be ready
+          echo "Waiting for MLflow to start..."
+          timeout 120 bash -c 'until curl -f http://localhost:5000/health 2>/dev/null; do sleep 5; done'
+          echo "MLflow is ready!"
+
+      - name: Run clustering experiment
+        run: |
+          # Build clustering image
+          docker-compose -f docker-compose.local-mlflow.yml build clustering
+          
+          # Run clustering with matrix parameters
+          docker-compose -f docker-compose.local-mlflow.yml run --rm clustering \
+            python src/model/clustering/hdbscan-clustering.py \
+            --feature-type ${{ matrix.feature_type }} \
+            --experiment-config ${{ matrix.config }} \
+            ${{ github.event.inputs.force_register == 'true' && '--force-register' || '' }}
+
+      - name: Check MLflow experiments
+        if: always()
+        run: |
+          echo "Checking MLflow experiments..."
+          curl -s http://localhost:5000/api/2.0/mlflow/experiments/search | jq '.'
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker-compose -f docker-compose.local-mlflow.yml down
+          docker system prune -f

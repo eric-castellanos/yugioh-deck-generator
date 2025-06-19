@@ -76,6 +76,28 @@ services:
     networks:
       - mlflow-network
 
+  # Clustering service
+  clustering:
+    build:
+      context: .
+      dockerfile: src/model/clustering/Dockerfile
+    container_name: yugioh-clustering
+    profiles:
+      - clustering  # Only start with --profile clustering
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow-local:5000
+      - MLFLOW_EXPERIMENT_NAME=/yugioh_card_clustering
+      - AWS_REGION=us-east-1
+      - AWS_PROFILE=${AWS_PROFILE}
+      - S3_BUCKET=${S3_BUCKET}
+    volumes:
+      - .:/workspace
+      - ~/.aws:/root/.aws:ro  # Mount AWS credentials
+    working_dir: /workspace
+    depends_on:
+      - mlflow-local
+    command: ["python", "src/model/clustering/hdbscan-clustering.py", "--feature-type", "combined", "--experiment-config", "combined_grid_search"]
+
 volumes:
   mlflow_local_db:
   mlflow_artifacts:
