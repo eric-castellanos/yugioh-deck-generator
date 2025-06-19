@@ -88,17 +88,99 @@ jobs:
 
       - name: Start MLflow service
         run: |
-          docker compose -f docker-compose.local-mlflow.yml up -d mlflow-local
+          # Check if MLflow is already running and healthy
+          if docker compose -f docker-compose.local-mlflow.yml ps mlflow-local | grep -q "healthy"; then
+            echo "MLflow is already running and healthy!"
+          else
+            echo "Starting MLflow server..."
+            
+            # Clean up any existing containers
+            docker compose -f docker-compose.local-mlflow.yml down mlflow-local 2>/dev/null || true
+            
+            # Start MLflow
+            docker compose -f docker-compose.local-mlflow.yml up -d mlflow-local
+            
+            # Wait for MLflow to be healthy using Docker health check
+            echo "Waiting for MLflow to be healthy..."
+            RETRY_COUNT=0
+            MAX_RETRIES=30  # 30 * 10 seconds = 5 minutes
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              HEALTH_STATUS=$(docker compose -f docker-compose.local-mlflow.yml ps mlflow-local --format "{{.Health}}" 2>/dev/null || echo "starting")
+              
+              case $HEALTH_STATUS in
+                "healthy")
+                  echo "MLflow is healthy!"
+                  break
+                  ;;
+                "unhealthy")
+                  echo "MLflow container is unhealthy. Showing logs:"
+                  docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=50
+                  exit 1
+                  ;;
+                *)
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                  echo "Attempt $RETRY_COUNT/$MAX_RETRIES: MLflow status: $HEALTH_STATUS, waiting 10 seconds..."
+                  
+                  # Show container logs periodically
+                  if [ $((RETRY_COUNT % 6)) -eq 0 ]; then  # Every minute
+                    echo "Container logs (last 20 lines):"
+                    docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=20
+                  fi
+                  
+                  sleep 10
+                  ;;
+              esac
+            done
+            
+            # Final check
+            FINAL_STATUS=$(docker compose -f docker-compose.local-mlflow.yml ps mlflow-local --format "{{.Health}}" 2>/dev/null || echo "unknown")
+            if [ "$FINAL_STATUS" != "healthy" ]; then
+              echo "MLflow failed to become healthy within timeout. Final status: $FINAL_STATUS"
+              echo "Final container logs:"
+              docker compose -f docker-compose.local-mlflow.yml logs mlflow-local
+              echo ""
+              echo "Container status:"
+              docker compose -f docker-compose.local-mlflow.yml ps mlflow-local
+              exit 1
+            fi
+          fi
+
+      - name: Verify MLflow connection
+        run: |
+          echo "Verifying MLflow server connection..."
           
-          # Wait for MLflow to be ready
-          echo "Waiting for MLflow to start..."
-          timeout 120 bash -c 'until curl -f http://localhost:5000/health 2>/dev/null; do sleep 5; done'
-          echo "MLflow is ready!"
+          # Test basic connectivity
+          curl -f http://localhost:5000/ || {
+            echo "Basic connectivity test failed"
+            exit 1
+          }
+          
+          # Test MLflow API
+          curl -f http://localhost:5000/api/2.0/mlflow/experiments/search || {
+            echo "MLflow API test failed"
+            exit 1
+          }
+          
+          echo "MLflow server is healthy and API is responding!"
+
+      - name: Show container status
+        run: |
+          echo "Current container status:"
+          docker compose -f docker-compose.local-mlflow.yml ps
+          echo ""
+          echo "Docker system info:"
+          docker system df
 
       - name: Run clustering experiment
         run: |
-          # Build clustering image
+          echo "Building clustering image..."
           docker compose -f docker-compose.local-mlflow.yml build clustering
+          
+          echo "Running clustering experiment with parameters:"
+          echo "  Feature type: ${{ matrix.feature_type }}"
+          echo "  Config: ${{ matrix.config }}"
+          echo "  Force register: ${{ github.event.inputs.force_register }}"
           
           # Run clustering with matrix parameters
           docker compose -f docker-compose.local-mlflow.yml run --rm clustering \
@@ -106,6 +188,8 @@ jobs:
             --feature-type ${{ matrix.feature_type }} \
             --experiment-config ${{ matrix.config }} \
             ${{ github.event.inputs.force_register == 'true' && '--force-register' || '' }}
+          
+          echo "Clustering experiment completed successfully!"
 
       - name: Check MLflow experiments
         if: always()
