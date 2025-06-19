@@ -4,8 +4,7 @@ services:
   mlflow-local:
     image: python:3.9-slim
     container_name: mlflow-local
-    ports:
-      - "5000:5000"
+    network_mode: host  # Use host networking to make MLflow accessible on localhost:5000
     environment:
       # Connect to your existing AWS RDS database 
       - BACKEND_STORE_URI=postgresql://mlflowadmin:${MLFLOW_DB_PASSWORD}@${RDS_ENDPOINT}/mlflow_db_dev
@@ -21,6 +20,11 @@ services:
       bash -c "
         apt-get update && apt-get install -y curl &&
         pip install --no-cache-dir mlflow==2.8.1 psycopg2-binary boto3 awscli &&
+        echo 'Checking AWS connectivity...' &&
+        aws sts get-caller-identity --region $$AWS_REGION || echo 'AWS connectivity check failed, but continuing...' &&
+        echo 'Testing database connectivity...' &&
+        echo 'Backend store URI: '$$BACKEND_STORE_URI &&
+        echo 'Artifact root: '$$ARTIFACT_ROOT &&
         echo 'Starting MLflow server connected to AWS resources...' &&
         mlflow server \
           --backend-store-uri $$BACKEND_STORE_URI \
@@ -30,11 +34,11 @@ services:
           --gunicorn-opts '--timeout=120 --workers=2'
       "
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      test: ["CMD", "bash", "-c", "curl -f http://localhost:5000/api/2.0/mlflow/experiments/search >/dev/null 2>&1"]
       interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      timeout: 15s
+      retries: 8
+      start_period: 90s
     # No networks section when using host networking
 
   # Optional: Local PostgreSQL for offline development
@@ -89,8 +93,9 @@ services:
       context: .
       dockerfile: src/model/clustering/Dockerfile
     container_name: yugioh-clustering
+    network_mode: host  # Use host networking to access MLflow on localhost:5000
     environment:
-      - MLFLOW_TRACKING_URI=http://mlflow-local:5000
+      - MLFLOW_TRACKING_URI=http://localhost:5000
       - MLFLOW_EXPERIMENT_NAME=/yugioh_card_clustering
       - AWS_REGION=us-east-1
       - AWS_PROFILE=${AWS_PROFILE}
@@ -99,8 +104,6 @@ services:
       - .:/workspace
       - ~/.aws:/root/.aws:ro  # Mount AWS credentials
     working_dir: /workspace
-    depends_on:
-      - mlflow-local
     command: ["python", "src/model/clustering/hdbscan-clustering.py", "--feature-type", "combined", "--experiment-config", "combined_grid_search"]
 
 volumes:

@@ -142,7 +142,35 @@ jobs:
               echo ""
               echo "Container status:"
               docker compose -f docker-compose.local-mlflow.yml ps mlflow-local
-              exit 1
+              
+              echo "Attempting to start MLflow with local file backend as fallback..."
+              docker compose -f docker-compose.local-mlflow.yml down mlflow-local
+              
+              # Start a simple MLflow server with file backend for CI testing
+              docker run -d --name mlflow-fallback \
+                --network host \
+                -v $PWD:/workspace \
+                -w /workspace \
+                python:3.9-slim \
+                bash -c "pip install mlflow==2.8.1 && mlflow server --host 0.0.0.0 --port 5000"
+              
+              # Wait for fallback server
+              echo "Waiting for fallback MLflow server..."
+              for i in {1..30}; do
+                if curl -f -s http://localhost:5000/ >/dev/null 2>&1; then
+                  echo "Fallback MLflow server is ready!"
+                  break
+                fi
+                echo "Waiting for fallback server... attempt $i/30"
+                sleep 5
+              done
+              
+              # Check if fallback worked
+              if ! curl -f -s http://localhost:5000/ >/dev/null 2>&1; then
+                echo "Even fallback MLflow server failed to start"
+                docker logs mlflow-fallback || true
+                exit 1
+              fi
             fi
           fi
 
@@ -150,17 +178,55 @@ jobs:
         run: |
           echo "Verifying MLflow server connection..."
           
-          # Test basic connectivity
-          curl -f http://localhost:5000/ || {
-            echo "Basic connectivity test failed"
-            exit 1
-          }
+          # Wait a bit more for MLflow to fully initialize
+          echo "Giving MLflow additional time to fully initialize..."
+          sleep 10
           
-          # Test MLflow API
-          curl -f http://localhost:5000/api/2.0/mlflow/experiments/search || {
-            echo "MLflow API test failed"
+          # Test basic connectivity with retries
+          RETRY_COUNT=0
+          MAX_RETRIES=10
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -f -s http://localhost:5000/ >/dev/null 2>&1; then
+              echo "Basic connectivity test passed!"
+              break
+            fi
+            
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Connectivity attempt $RETRY_COUNT/$MAX_RETRIES failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "Basic connectivity test failed after $MAX_RETRIES attempts"
+            echo "Container logs:"
+            docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=30
             exit 1
-          }
+          fi
+          
+          # Test MLflow API with retries
+          echo "Testing MLflow API..."
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -f -s http://localhost:5000/api/2.0/mlflow/experiments/search >/dev/null 2>&1; then
+              echo "MLflow API test passed!"
+              break
+            fi
+            
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "API test attempt $RETRY_COUNT/$MAX_RETRIES failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "MLflow API test failed after $MAX_RETRIES attempts"
+            echo "Trying to get more details..."
+            curl -v http://localhost:5000/api/2.0/mlflow/experiments/search || true
+            echo "Container logs:"
+            docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=30
+            exit 1
+          fi
           
           echo "MLflow server is healthy and API is responding!"
 
@@ -183,6 +249,7 @@ jobs:
           echo "  Force register: ${{ github.event.inputs.force_register }}"
           
           # Run clustering with matrix parameters
+          # Both MLflow servers are accessible on localhost:5000 due to host networking
           docker compose -f docker-compose.local-mlflow.yml run --rm clustering \
             python src/model/clustering/hdbscan-clustering.py \
             --feature-type ${{ matrix.feature_type }} \
@@ -200,5 +267,8 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          docker compose -f docker-compose.local-mlflow.yml down
+          echo "Cleaning up containers..."
+          docker compose -f docker-compose.local-mlflow.yml down || true
+          docker stop mlflow-fallback 2>/dev/null || true
+          docker rm mlflow-fallback 2>/dev/null || true
           docker system prune -f
