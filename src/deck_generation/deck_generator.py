@@ -754,120 +754,172 @@ def generate_deck_from_registry(mode: str = "novel",
 
 
 if __name__ == "__main__":
-    # Test data: simulate clustered card data with proper variety
-    test_cards = {
-        0: [  # Meta cluster (Blue-Eyes archetype) - Monsters
-            {'name': 'Blue-Eyes White Dragon', 'type': 'Monster', 'archetype': 'Blue-Eyes', 'archetypes': ['Blue-Eyes'], 'cluster_id': 0},
-            {'name': 'Blue-Eyes Alternative White Dragon', 'type': 'Monster', 'archetype': 'Blue-Eyes', 'archetypes': ['Blue-Eyes'], 'cluster_id': 0},
-            {'name': 'Deep-Eyes White Dragon', 'type': 'Monster', 'archetype': 'Blue-Eyes', 'archetypes': ['Blue-Eyes'], 'cluster_id': 0},
-            {'name': 'Blue-Eyes Chaos Dragon', 'type': 'Monster', 'archetype': 'Blue-Eyes', 'archetypes': ['Blue-Eyes'], 'cluster_id': 0},
-            {'name': 'Blue-Eyes Spirit Dragon', 'type': 'Monster', 'archetype': 'Blue-Eyes', 'archetypes': ['Blue-Eyes'], 'cluster_id': 0},
-        ],
-        1: [  # Support spells
-            {'name': 'Dragon Shrine', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 1},
-            {'name': 'Return of the Dragon Lords', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 1},
-            {'name': 'Trade-In', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 1},
-            {'name': 'Cards of Consonance', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 1},
-            {'name': 'Melody of Awakening Dragon', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 1},
-        ],
-        2: [  # Generic monsters and mixed cards
-            {'name': 'Elemental HERO Sparkman', 'type': 'Monster', 'archetype': 'HERO', 'archetypes': ['HERO'], 'cluster_id': 2},
-            {'name': 'Aleister the Invoker', 'type': 'Monster', 'archetype': 'Invoked', 'archetypes': ['Invoked'], 'cluster_id': 2},
-            {'name': 'Ash Blossom & Joyous Spring', 'type': 'Monster', 'archetype': None, 'archetypes': [], 'cluster_id': 2},
-            {'name': 'Effect Veiler', 'type': 'Monster', 'archetype': None, 'archetypes': [], 'cluster_id': 2},
-            {'name': 'Mystical Space Typhoon', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 2},
-        ],
-        3: [  # Trap cards
-            {'name': 'Mirror Force', 'type': 'Trap', 'archetype': None, 'archetypes': [], 'cluster_id': 3},
-            {'name': 'Torrential Tribute', 'type': 'Trap', 'archetype': None, 'archetypes': [], 'cluster_id': 3},
-            {'name': 'Solemn Judgment', 'type': 'Trap', 'archetype': None, 'archetypes': [], 'cluster_id': 3},
-            {'name': 'Bottomless Trap Hole', 'type': 'Trap', 'archetype': None, 'archetypes': [], 'cluster_id': 3},
-            {'name': 'Compulsory Evacuation Device', 'type': 'Trap', 'archetype': None, 'archetypes': [], 'cluster_id': 3},
-        ],
-        4: [  # More monsters for diversity
-            {'name': 'Dark Magician', 'type': 'Monster', 'archetype': 'Dark Magician', 'archetypes': ['Dark Magician'], 'cluster_id': 4},
-            {'name': 'Red-Eyes Black Dragon', 'type': 'Monster', 'archetype': 'Red-Eyes', 'archetypes': ['Red-Eyes'], 'cluster_id': 4},
-            {'name': 'Summoned Skull', 'type': 'Monster', 'archetype': None, 'archetypes': [], 'cluster_id': 4},
-            {'name': 'Celtic Guardian', 'type': 'Monster', 'archetype': None, 'archetypes': [], 'cluster_id': 4},
-            {'name': 'Fissure', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 4},
-        ],
-        5: [  # Extra deck cards
-            {'name': 'Blue-Eyes Ultimate Dragon', 'type': 'Fusion Monster', 'archetype': 'Blue-Eyes', 'archetypes': ['Blue-Eyes'], 'cluster_id': 5},
-            {'name': 'Neo Blue-Eyes Ultimate Dragon', 'type': 'Fusion Monster', 'archetype': 'Blue-Eyes', 'archetypes': ['Blue-Eyes'], 'cluster_id': 5},
-            {'name': 'Blue-Eyes Twin Burst Dragon', 'type': 'Fusion Monster', 'archetype': 'Blue-Eyes', 'archetypes': ['Blue-Eyes'], 'cluster_id': 5},
-        ],
-        6: [  # More spells
-            {'name': 'Pot of Desires', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 6},
-            {'name': 'Raigeki', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 6},
-            {'name': 'Dark Hole', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 6},
-            {'name': 'Monster Reborn', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 6},
-            {'name': 'Heavy Storm', 'type': 'Spell', 'archetype': None, 'archetypes': [], 'cluster_id': 6},
-        ]
-    }
+    import os
+    import json
+    import csv
+    import pandas as pd
+    import tempfile
+    import mlflow
+    from collections import Counter
+    from src.utils.mlflow.mlflow_utils import (
+        setup_deck_generation_experiment,
+        log_deck_generation_tags,
+        log_deck_generation_params,
+        MLFLOW_TRACKING_URI
+    )
     
-    print("=== Yu-Gi-Oh! Deck Generator Test with MLflow Integration ===\n")
+    print("===== Yu-Gi-Oh! Deck Generator - Generating 10 Decks =====")
     
-    # Test 1: Traditional deck generation without MLflow (for backwards compatibility)
-    print("1. Testing Traditional Deck Generation (No MLflow):")
-    generator = SimpleDeckGenerator(test_cards)
-    main_deck, extra_deck, metadata = generator.generate_deck("novel", use_mlflow=False)
+    # Set up MLflow experiment
+    experiment_id = setup_deck_generation_experiment("yugioh_deck_generation")
     
-    print(f"Generated deck: {len(main_deck)} main + {len(extra_deck)} extra cards")
-    print(f"Dominant archetype: {metadata.dominant_archetype}")
-    print(f"Cluster entropy: {metadata.cluster_entropy:.2f}")
-    
-    # Test 2: Deck generation with MLflow tracking (using provided test data)
-    print("\n" + "="*60)
-    print("2. Testing Deck Generation with MLflow (Test Data):")
+    # Load the clustered card data from the MLflow model registry
+    print("Loading clustered cards from MLflow model registry...")
     try:
-        main_deck, extra_deck, metadata = generate_deck(
-            clustered_cards=test_cards,
+        clustered_cards = get_card_data_with_clusters()
+        print(f"✅ Successfully loaded {len(clustered_cards)} card clusters")
+    except Exception as e:
+        print(f"❌ Failed to load clusters: {e}")
+        exit(1)
+    
+    # Start an MLflow run for generating and tracking multiple decks
+    with mlflow.start_run(experiment_id=experiment_id) as run:
+        log_deck_generation_tags(
+            generation_mode="novel",
+            version="v1.0",
+            stage="production"
+        )
+        
+        log_deck_generation_params(
+            deck_count=10,
             mode="novel",
-            use_mlflow=True,
-            load_from_registry=False
+            min_cards=40,
+            max_cards=60
         )
-        print(f"✓ Generated deck with MLflow tracking: {len(main_deck)} main + {len(extra_deck)} extra cards")
-        print(f"✓ Dominant archetype: {metadata.dominant_archetype}")
-        print(f"✓ Cluster entropy: {metadata.cluster_entropy:.2f}")
-    except Exception as e:
-        print(f"✗ MLflow test failed: {e}")
-    
-    # Test 3: Meta-aware deck generation
-    print("\n" + "="*60)
-    print("3. Testing Meta-Aware Deck Generation:")
-    try:
-        main_deck, extra_deck, metadata = generate_deck(
-            clustered_cards=test_cards,
-            mode="meta_aware",
-            target_archetype="Blue-Eyes",
-            use_mlflow=True,
-            load_from_registry=False
-        )
-        print(f"✓ Generated Blue-Eyes deck: {len(main_deck)} main + {len(extra_deck)} extra cards")
-        print(f"✓ Dominant archetype: {metadata.dominant_archetype}")
-        blue_eyes_cards = sum(1 for card in main_deck + extra_deck 
-                             if 'Blue-Eyes' in card.get('archetypes', []))
-        print(f"✓ Blue-Eyes cards in deck: {blue_eyes_cards}")
-    except Exception as e:
-        print(f"✗ Meta-aware test failed: {e}")
-    
-    # Test 4: Deck generation from MLflow model registry (this will likely fail without real model)
-    print("\n" + "="*60)
-    print("4. Testing Deck Generation from MLflow Model Registry:")
-    try:
-        main_deck, extra_deck, metadata = generate_deck_from_registry(mode="novel")
-        print(f"✓ Generated deck from registry: {len(main_deck)} main + {len(extra_deck)} extra cards")
-        print(f"✓ Dominant archetype: {metadata.dominant_archetype}")
-    except Exception as e:
-        print(f"✗ Registry test failed (expected if no model in registry): {e}")
-    
-    print("\n=== Test Complete ===")
-    
-    # Show final deck details for the last successful generation
-    if 'main_deck' in locals():
-        print(f"\nFinal Deck Details:")
-        ratios = generator._check_ratios(main_deck)
-        print(f"  Ratios - Monsters: {ratios['monster_ratio']:.1%}, "
-              f"Spells: {ratios['spell_ratio']:.1%}, Traps: {ratios['trap_ratio']:.1%}")
-        print(f"  Ratios acceptable: {generator._is_ratio_acceptable(main_deck)}")
-        print(f"  Archetype distribution: {dict(list(metadata.archetype_distribution.items())[:3])}")
+        
+        print("\n=== Generating 10 Decks from Clustering Model ===")
+        
+        # Initialize deck generator with the loaded clusters
+        generator = SimpleDeckGenerator(clustered_cards)
+        
+        # Lists to store all generated decks and their metadata
+        all_decks = []
+        deck_summaries = []
+        
+        # Generate 10 decks
+        for i in range(10):
+            print(f"\nGenerating Deck #{i+1}...")
+            
+            # Generate a novel deck without using internal MLflow tracking
+            # (We'll handle logging ourselves in the parent run)
+            try:
+                main_deck, extra_deck, metadata = generator.generate_deck(
+                    mode="novel", 
+                    use_mlflow=False  # Disable internal MLflow tracking
+                )
+                
+                # Store deck info for collection artifact
+                deck_info = {
+                    "deck_id": i+1,
+                    "main_deck_size": len(main_deck),
+                    "extra_deck_size": len(extra_deck),
+                    "dominant_archetype": metadata.dominant_archetype if metadata.dominant_archetype != "Unknown" else "Generic",
+                    "monster_count": metadata.monster_count,
+                    "spell_count": metadata.spell_count,
+                    "trap_count": metadata.trap_count,
+                    "cluster_entropy": metadata.cluster_entropy,
+                }
+                
+                deck_summaries.append(deck_info)
+                all_decks.append({
+                    "deck_id": i+1,
+                    "main_deck": main_deck,
+                    "extra_deck": extra_deck,
+                    "metadata": metadata.to_dict() if hasattr(metadata, "to_dict") else metadata.__dict__
+                })
+                
+                print(f"✅ Deck #{i+1} generated successfully:")
+                print(f"   - Main deck: {len(main_deck)} cards")
+                print(f"   - Extra deck: {len(extra_deck)} cards")
+                print(f"   - Dominant archetype: {metadata.dominant_archetype}")
+                print(f"   - Monster/Spell/Trap: {metadata.monster_count}/{metadata.spell_count}/{metadata.trap_count}")
+                print(f"   - Cluster entropy: {metadata.cluster_entropy:.2f}")
+                
+                # Log individual deck metrics to MLflow
+                with mlflow.start_run(nested=True) as child_run:
+                    mlflow.log_param("deck_id", i+1)
+                    mlflow.log_param("dominant_archetype", metadata.dominant_archetype)
+                    mlflow.log_metric("main_deck_size", len(main_deck))
+                    mlflow.log_metric("extra_deck_size", len(extra_deck))
+                    mlflow.log_metric("monster_count", metadata.monster_count)
+                    mlflow.log_metric("spell_count", metadata.spell_count)
+                    mlflow.log_metric("trap_count", metadata.trap_count)
+                    mlflow.log_metric("cluster_entropy", metadata.cluster_entropy)
+                    
+                    # Log this individual deck as artifacts
+                    log_deck_artifacts(main_deck, extra_deck, metadata)
+                    
+            except Exception as e:
+                print(f"❌ Failed to generate deck #{i+1}: {e}")
+                continue
+        
+        # Log collection of all generated decks as batch artifacts
+        
+        # 1. Save all decks as a single JSON file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
+            json.dump(all_decks, tmp_file, indent=2, default=str)
+            tmp_file.flush()
+            mlflow.log_artifact(tmp_file.name, "all_decks.json")
+            json_path = tmp_file.name
+        
+        # 2. Create a summary CSV with key metrics for each deck
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
+            fieldnames = [
+                "deck_id", "main_deck_size", "extra_deck_size", "dominant_archetype", 
+                "monster_count", "spell_count", "trap_count", "cluster_entropy"
+            ]
+            writer = csv.DictWriter(tmp_file, fieldnames=fieldnames)
+            writer.writeheader()
+            for deck_info in deck_summaries:
+                writer.writerow(deck_info)
+            tmp_file.flush()
+            mlflow.log_artifact(tmp_file.name, "deck_summaries.csv")
+            csv_path = tmp_file.name
+        
+        # 3. Convert CSV to a pandas DataFrame and log as a table
+        try:
+            deck_df = pd.read_csv(csv_path)
+            mlflow.log_table(data=deck_df, artifact_file="deck_metrics_table.json")
+        except Exception as e:
+            print(f"Warning: Could not log DataFrame as table: {e}")
+        
+        # Clean up temporary files
+        try:
+            os.unlink(json_path)
+            os.unlink(csv_path)
+        except Exception:
+            pass
+        
+        # Log the number of successful generations as a metric
+        mlflow.log_metric("successful_generations", len(deck_summaries))
+        
+        # Log overall generation statistics
+        if deck_summaries:
+            avg_entropy = sum(d["cluster_entropy"] for d in deck_summaries) / len(deck_summaries)
+            mlflow.log_metric("average_cluster_entropy", avg_entropy)
+            
+            # Count most common archetypes
+            archetype_counter = Counter(d["dominant_archetype"] for d in deck_summaries)
+            most_common_archetype, most_common_count = archetype_counter.most_common(1)[0]
+            mlflow.log_param("most_common_archetype", most_common_archetype)
+            mlflow.log_metric("most_common_archetype_count", most_common_count)
+        
+        print("\n=== Deck Generation Complete ===")
+        print(f"✅ Successfully generated {len(deck_summaries)} of 10 decks")
+        print(f"✅ All decks and metrics logged to MLflow run: {run.info.run_id}")
+        print(f"✅ MLflow UI: {MLFLOW_TRACKING_URI}/#/experiments/{experiment_id}")
+        
+        if deck_summaries:
+            print("\nSummary Statistics:")
+            print(f"- Average cluster entropy: {avg_entropy:.2f}")
+            print(f"- Most common archetype: {most_common_archetype} ({most_common_count} decks)")
