@@ -6,13 +6,13 @@ services:
       - "5000:5000"  # Map container port 5000 to host port 5000
     environment:
       # Connect to your existing AWS RDS database 
-      - BACKEND_STORE_URI=postgresql://mlflowadmin:${MLFLOW_DB_PASSWORD}@${RDS_ENDPOINT}/mlflow_db_dev
+      - BACKEND_STORE_URI=postgresql://mlflowadmin:${MLFLOW_DB_PASSWORD}@${RDS_ENDPOINT}:${DB_PORT:-5432}/mlflow_db_dev
       # Use your existing S3 bucket for artifacts
       - ARTIFACT_ROOT=s3://${S3_BUCKET}/mlflow-artifacts
       - AWS_REGION=us-east-1
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      # No session token needed for direct IAM user access
     volumes:
       - .:/workspace
     working_dir: /workspace
@@ -22,10 +22,21 @@ services:
         pip install --no-cache-dir mlflow==2.8.1 psycopg2-binary boto3 awscli &&
         echo 'Checking AWS connectivity...' &&
         aws sts get-caller-identity --region $$AWS_REGION || echo 'AWS connectivity check failed, but continuing...' &&
+        echo 'Testing S3 access...' &&
+        aws s3 ls s3://${S3_BUCKET}/mlflow-artifacts/ --recursive --page-size 5 --max-items 5 || echo 'S3 connectivity check failed, but continuing...' &&
         echo 'Testing database connectivity...' &&
         echo 'Backend store URI: '$$BACKEND_STORE_URI &&
         echo 'Artifact root: '$$ARTIFACT_ROOT &&
         echo 'Starting MLflow server connected to AWS resources...' &&
+        # Configure AWS SDK settings explicitly
+        export AWS_DEFAULT_REGION=$$AWS_REGION &&
+        # Create boto config to increase debug level
+        mkdir -p ~/.aws &&
+        echo '[default]' > ~/.aws/config &&
+        echo 'region = $$AWS_REGION' >> ~/.aws/config &&
+        echo 's3 =' >> ~/.aws/config &&
+        echo '    signature_version = s3v4' >> ~/.aws/config &&
+        # Start MLflow server
         mlflow server \
           --backend-store-uri $$BACKEND_STORE_URI \
           --default-artifact-root $$ARTIFACT_ROOT \

@@ -23,36 +23,52 @@ fi
 setup_aws_credentials() {
     echo "🔑 Setting up AWS credentials..."
     
+    # Check if we have the AWS credentials in the environment variables already
+    if [ ! -z "$AWS_ACCESS_KEY_ID" ] && [ ! -z "$AWS_SECRET_ACCESS_KEY" ] && [ ! -z "$AWS_SESSION_TOKEN" ]; then
+        echo "✅ Using AWS credentials from environment variables"
+        
+        # Verify the credentials work
+        if aws sts get-caller-identity &> /dev/null; then
+            echo "✅ AWS credentials are verified and working"
+            return 0
+        else
+            echo "⚠️  AWS credentials in environment are invalid or expired"
+        fi
+    fi
+    
+    # If not, check if credentials are in the .env.mlflow-tunnel file
+    if [ -f .env.mlflow-tunnel ]; then
+        echo "� Checking for AWS credentials in .env.mlflow-tunnel..."
+        
+        # Extract credentials from the .env file
+        export AWS_ACCESS_KEY_ID=$(grep AWS_ACCESS_KEY_ID .env.mlflow-tunnel | cut -d '=' -f2)
+        export AWS_SECRET_ACCESS_KEY=$(grep AWS_SECRET_ACCESS_KEY .env.mlflow-tunnel | cut -d '=' -f2)
+        
+        if [ ! -z "$AWS_ACCESS_KEY_ID" ] && [ ! -z "$AWS_SECRET_ACCESS_KEY" ] && [ ! -z "$AWS_SESSION_TOKEN" ]; then
+            echo "✅ Found AWS credentials in .env.mlflow-tunnel"
+            
+            # Verify the credentials work
+            if aws sts get-caller-identity &> /dev/null; then
+                echo "✅ AWS credentials are verified and working"
+                return 0
+            else
+                echo "⚠️  AWS credentials in .env.mlflow-tunnel are invalid or expired"
+            fi
+        fi
+    fi
+    
+    # If we still don't have working credentials, try the AWS CLI
     if command -v aws &> /dev/null; then
         echo "AWS CLI found. Attempting to use existing credentials..."
         
         # Try to get current credentials and test them
         if aws sts get-caller-identity &> /dev/null; then
-            echo "✅ AWS credentials are already configured and working"
+            echo "✅ AWS credentials from AWS CLI are working"
             return 0
         else
-            echo "⚠️  Current AWS credentials are expired or invalid"
-            
-            # Try to assume the MLflow role for enhanced permissions
-            echo "🔄 Attempting to assume setup-mlflow role..."
-            ROLE_ARN="arn:aws:iam::256995722813:role/setup-mlflow"
-            
-            TEMP_CREDS=$(aws sts assume-role \
-                --role-arn "$ROLE_ARN" \
-                --role-session-name "mlflow-local-session" \
-                --output json 2>/dev/null || echo "")
-                
-            if [ ! -z "$TEMP_CREDS" ]; then
-                export AWS_ACCESS_KEY_ID=$(echo $TEMP_CREDS | jq -r '.Credentials.AccessKeyId')
-                export AWS_SECRET_ACCESS_KEY=$(echo $TEMP_CREDS | jq -r '.Credentials.SecretAccessKey')
-                export AWS_SESSION_TOKEN=$(echo $TEMP_CREDS | jq -r '.Credentials.SessionToken')
-                echo "✅ Successfully assumed setup-mlflow role"
-                return 0
-            else
-                echo "❌ Could not assume role. Please check your AWS credentials"
-                echo "💡 Run 'aws configure' or set valid AWS credentials in your environment"
-                return 1
-            fi
+            echo "⚠️  Current AWS CLI credentials are expired or invalid"
+            echo "💡 Please run './fix_aws_env.sh' to refresh your AWS credentials"
+            return 1
         fi
     else
         echo "❌ AWS CLI not found. Please install it first"
@@ -65,7 +81,11 @@ test_rds_connection() {
     echo "🔗 Testing RDS connection..."
     
     if command -v psql &> /dev/null; then
-        if PGPASSWORD="$MLFLOW_DB_PASSWORD" psql -h "$RDS_ENDPOINT" -U "mlflowadmin" -d "mlflow_db_dev" -c "SELECT 1;" &> /dev/null; then
+        # Use DB_PORT if defined, otherwise default to 5432
+        PORT="${DB_PORT:-5432}"
+        echo "Attempting to connect to $RDS_ENDPOINT:$PORT..."
+        
+        if PGPASSWORD="$MLFLOW_DB_PASSWORD" psql -h "$RDS_ENDPOINT" -p "$PORT" -U "mlflowadmin" -d "mlflow_db_dev" -c "SELECT 1;" &> /dev/null; then
             echo "✅ RDS connection successful"
         else
             echo "❌ RDS connection failed. Check your credentials and network connectivity"
@@ -99,7 +119,6 @@ MLFLOW_DB_PASSWORD=${MLFLOW_DB_PASSWORD}
 S3_BUCKET=${S3_BUCKET}
 AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
 EOF
     
     # Start the service
