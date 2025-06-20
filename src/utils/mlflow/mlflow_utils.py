@@ -914,7 +914,7 @@ def force_register_model_from_run(
 # DECK GENERATION MLFLOW UTILITIES
 # =====================================
 
-def setup_deck_generation_experiment(experiment_name: str = "/yugioh_deck_generation") -> str:
+def setup_deck_generation_experiment(experiment_name: str = "yugioh_deck_generation") -> str:
     """
     Set up or get the deck generation experiment.
     

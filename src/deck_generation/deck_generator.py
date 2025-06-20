@@ -148,13 +148,15 @@ class SimpleDeckGenerator:
     - novel: Creates diverse decks by combining clusters creatively
     """
     
-    def __init__(self, clustered_cards: Dict[int, List[Dict]]):
+    def __init__(self, clustered_cards: Dict[int, List[Dict]], num_cards: int = 40):
         """
         Initialize the deck generator.
         
         Args:
             clustered_cards: Dictionary mapping cluster IDs to lists of card dictionaries
+            num_cards: Number of cards in the main deck (default: 40)
         """
+        self.num_cards = num_cards
         self.clustered_cards = clustered_cards
         
         # Separate cards by deck placement
@@ -308,7 +310,7 @@ class SimpleDeckGenerator:
         """Generate a deck anchored on a target archetype with proper card type ratios."""
         
         # Calculate target counts for each card type
-        target_monsters, target_spells, target_traps = self._calculate_target_counts(40)
+        target_monsters, target_spells, target_traps = self._calculate_target_counts(self.num_cards)
         
         # Find clusters containing the target archetype
         archetype_monster_clusters = []
@@ -487,7 +489,7 @@ class SimpleDeckGenerator:
         logger.info("Generating novel deck with diverse cluster combination and proper ratios")
         
         # Calculate target counts for each card type
-        target_monsters, target_spells, target_traps = self._calculate_target_counts(40)
+        target_monsters, target_spells, target_traps = self._calculate_target_counts(self.num_cards)
         
         main_deck = []
         
@@ -675,7 +677,8 @@ def generate_deck(clustered_cards: Optional[Dict[int, List[Dict]]] = None,
                  mode: str = "novel", 
                  target_archetype: Optional[str] = None,
                  use_mlflow: bool = True,
-                 load_from_registry: bool = True) -> Tuple[List[Dict], List[Dict], DeckMetadata]:
+                 load_from_registry: bool = True,
+                 num_cards: int = 40) -> Tuple[List[Dict], List[Dict], DeckMetadata]:
     """
     Quick deck generation function with MLflow integration.
     
@@ -708,12 +711,14 @@ def generate_deck(clustered_cards: Optional[Dict[int, List[Dict]]] = None,
     if clustered_cards is None:
         raise ValueError("clustered_cards parameter is required when load_from_registry=False")
     
-    generator = SimpleDeckGenerator(clustered_cards)
+    generator = SimpleDeckGenerator(clustered_cards, num_cards=num_cards)
     return generator.generate_deck(mode, target_archetype, use_mlflow)
 
 
 def generate_deck_from_registry(mode: str = "novel", 
-                               target_archetype: Optional[str] = None) -> Tuple[List[Dict], List[Dict], DeckMetadata]:
+                               target_archetype: Optional[str] = None,
+                               experiment_name: str = "yugioh_deck_generation",
+                               num_cards: int = 40) -> Tuple[List[Dict], List[Dict], DeckMetadata]:
     """
     Generate a deck using clustered cards loaded from MLflow model registry.
     
@@ -723,16 +728,23 @@ def generate_deck_from_registry(mode: str = "novel",
     Args:
         mode: Generation mode ("meta_aware" or "novel")
         target_archetype: Target archetype for meta_aware mode
+        experiment_name: MLflow experiment name
+        num_cards: Number of cards in the main deck
         
     Returns:
         Tuple of (main_deck, extra_deck, metadata)
     """
+    # Set the experiment by name explicitly
+    from src.utils.mlflow.mlflow_utils import setup_deck_generation_experiment
+    setup_deck_generation_experiment(experiment_name)
+    
     return generate_deck(
         clustered_cards=None,
         mode=mode,
         target_archetype=target_archetype,
         use_mlflow=True,
-        load_from_registry=True
+        load_from_registry=True,
+        num_cards=num_cards
     )
 
 

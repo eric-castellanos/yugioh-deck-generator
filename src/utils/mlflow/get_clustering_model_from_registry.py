@@ -76,13 +76,15 @@ def get_card_data_with_clusters(clustering_model = None) -> Dict[int, List[Dict]
     Get card data with cluster assignments from the trained clustering model.
     
     Instead of re-clustering, this function retrieves the original cluster labels 
-    assigned during model training.
+    assigned during model training. All cards are included, including those labeled as
+    noise points (cluster -1) by HDBSCAN.
     
     Args:
         clustering_model: Optional clustering model. If not provided, will load from registry.
     
     Returns:
-        Dictionary mapping cluster IDs to lists of card dictionaries
+        Dictionary mapping cluster IDs to lists of card dictionaries, including noise points
+        as cluster "-1"
     """
     try:
         # Load model if not provided
@@ -176,12 +178,8 @@ def get_card_data_with_clusters(clustering_model = None) -> Dict[int, List[Dict]
         unique_clusters = np.unique(labels)
         logger.info(f"Found {len(unique_clusters)} unique clusters including noise points")
         
-        # Process each cluster
+        # Process each cluster (including noise points labeled as -1)
         for cluster_id in unique_clusters:
-            # Skip noise points (cluster -1) if they exist
-            if cluster_id == -1:
-                continue
-            
             # Get all cards in this cluster
             cluster_cards = meta_df.filter(pl.col("cluster_id") == cluster_id)
             
@@ -210,15 +208,18 @@ def get_card_data_with_clusters(clustering_model = None) -> Dict[int, List[Dict]
                     
                 cards_list.append(card_dict)
             
+            # Store the cards in the cluster dictionary, including noise points (-1)
             clustered_cards[int(cluster_id)] = cards_list
             
         # Calculate some statistics for logging
         non_noise_clusters = len([c for c in unique_clusters if c != -1])
+        noise_cards = len(clustered_cards.get(-1, []))
         total_cards = sum(len(cards) for cards in clustered_cards.values())
-        avg_cluster_size = total_cards / non_noise_clusters if non_noise_clusters > 0 else 0
+        avg_cluster_size = total_cards / len(clustered_cards) if clustered_cards else 0
         
-        logger.info(f"Created clustered cards dictionary with {len(clustered_cards)} clusters")
+        logger.info(f"Created clustered cards dictionary with {len(clustered_cards)} clusters (including noise cluster)")
         logger.info(f"Total of {total_cards} cards across all clusters, average cluster size: {avg_cluster_size:.2f}")
+        logger.info(f"Noise cluster (-1) contains {noise_cards} cards")
         
         return clustered_cards
     
