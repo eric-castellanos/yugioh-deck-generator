@@ -25,7 +25,7 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 client = MlflowClient(MLFLOW_TRACKING_URI)
 
 
-def setup_clustering_experiment(experiment_name: str = "/yugioh_card_clustering") -> str:
+def setup_clustering_experiment(experiment_name: str = "yugioh_card_clustering") -> str:
     """
     Set up or get the clustering experiment.
     
