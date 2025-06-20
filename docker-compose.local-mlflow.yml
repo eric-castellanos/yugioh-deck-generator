@@ -1,0 +1,120 @@
+services:
+  mlflow-local:
+    image: python:3.9-slim
+    container_name: mlflow-local
+    ports:
+      - "5000:5000"  # Map container port 5000 to host port 5000
+    environment:
+      # Connect to your existing AWS RDS database 
+      - BACKEND_STORE_URI=postgresql://mlflowadmin:${MLFLOW_DB_PASSWORD}@${RDS_ENDPOINT}/mlflow_db_dev
+      # Use your existing S3 bucket for artifacts
+      - ARTIFACT_ROOT=s3://${S3_BUCKET}/mlflow-artifacts
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: >
+      bash -c "
+        apt-get update && apt-get install -y curl &&
+        pip install --no-cache-dir mlflow==2.8.1 psycopg2-binary boto3 awscli &&
+        echo 'Checking AWS connectivity...' &&
+        aws sts get-caller-identity --region $$AWS_REGION || echo 'AWS connectivity check failed, but continuing...' &&
+        echo 'Testing database connectivity...' &&
+        echo 'Backend store URI: '$$BACKEND_STORE_URI &&
+        echo 'Artifact root: '$$ARTIFACT_ROOT &&
+        echo 'Starting MLflow server connected to AWS resources...' &&
+        mlflow server \
+          --backend-store-uri $$BACKEND_STORE_URI \
+          --default-artifact-root $$ARTIFACT_ROOT \
+          --host 0.0.0.0 \
+          --port 5000 \
+          --gunicorn-opts '--timeout=120 --workers=2'
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 15s
+      retries: 8
+      start_period: 90s
+    networks:
+      - mlflow-network
+
+  # Optional: Local PostgreSQL for offline development
+  mlflow-local-db:
+    image: postgres:13
+    container_name: mlflow-local-db
+    profiles:
+      - offline  # Only start with --profile offline
+    environment:
+      - POSTGRES_DB=mlflow_local
+      - POSTGRES_USER=mlflow
+      - POSTGRES_PASSWORD=mlflow123
+    ports:
+      - "5432:5432"
+    volumes:
+      - mlflow_local_db:/var/lib/postgresql/data
+    networks:
+      - mlflow-network
+
+  mlflow-offline:
+    image: python:3.9-slim
+    container_name: mlflow-offline
+    profiles:
+      - offline  # Only start with --profile offline
+    ports:
+      - "5001:5000"
+    environment:
+      - BACKEND_STORE_URI=postgresql://mlflow:mlflow123@mlflow-local-db:5432/mlflow_local
+      - ARTIFACT_ROOT=/mlflow/artifacts
+    volumes:
+      - .:/workspace
+      - mlflow_artifacts:/mlflow/artifacts
+    working_dir: /workspace
+    depends_on:
+      - mlflow-local-db
+    command: >
+      bash -c "
+        pip install --no-cache-dir mlflow==2.8.1 psycopg2-binary &&
+        echo 'Starting local MLflow server...' &&
+        mlflow server \
+          --backend-store-uri $$BACKEND_STORE_URI \
+          --default-artifact-root $$ARTIFACT_ROOT \
+          --host 0.0.0.0 \
+          --port 5000
+      "
+    networks:
+      - mlflow-network
+
+  # Clustering service
+  clustering:
+    build:
+      context: .
+      dockerfile: src/model/clustering/Dockerfile
+    container_name: yugioh-clustering
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow-local:5000  # Use container name instead of localhost
+      - MLFLOW_EXPERIMENT_NAME=/yugioh_card_clustering
+      - AWS_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET}
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    depends_on:
+      - mlflow-local
+    networks:
+      - mlflow-network
+    command: ["python", "src/model/clustering/hdbscan-clustering.py", "--feature-type", "combined", "--experiment-config", "combined_grid_search"]
+
+volumes:
+  mlflow_local_db:
+  mlflow_artifacts:
+
+networks:
+  mlflow-network:
+    driver: bridge

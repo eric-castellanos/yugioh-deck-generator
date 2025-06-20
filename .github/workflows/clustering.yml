@@ -1,0 +1,303 @@
+name: HDBSCAN Clustering Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_type:
+        description: 'Feature type to use'
+        required: true
+        default: 'combined'
+        type: choice
+        options:
+        - tfidf
+        - embeddings  
+        - combined
+        - all
+      experiment_config:
+        description: 'Experiment configuration'
+        required: true
+        default: 'combined_grid_search'
+        type: choice
+        options:
+        - pca_euclidean
+        - umap_euclidean
+        - combined_grid_search
+        - all
+      force_register:
+        description: 'Force register model regardless of criteria'
+        required: false
+        default: false
+        type: boolean
+
+  push:
+    branches:
+      - feature/clustering_model
+    paths:
+      - 'src/model/clustering/**'
+      - 'src/utils/clustering/**'
+      - 'src/utils/mlflow/**'
+
+  pull_request:
+    paths:
+      - 'src/model/clustering/**'
+      - 'src/utils/clustering/**'
+      - 'src/utils/mlflow/**'
+
+jobs:
+  clustering:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature_type: ${{ github.event.inputs.feature_type && fromJson(format('["{0}"]', github.event.inputs.feature_type)) || fromJson('["combined"]') }}
+        config: ${{ github.event.inputs.experiment_config && fromJson(format('["{0}"]', github.event.inputs.experiment_config)) || fromJson('["pca_euclidean"]') }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Get infrastructure information
+        id: infra-info
+        run: |
+          # Get RDS endpoint
+          RDS_ENDPOINT=$(aws rds describe-db-instances \
+            --db-instance-identifier mlflow-db-dev \
+            --query 'DBInstances[0].Endpoint.Address' \
+            --output text 2>/dev/null || echo "")
+          
+          # Get S3 bucket name  
+          S3_BUCKET=$(aws s3api list-buckets \
+            --query 'Buckets[?contains(Name, `yugioh`)].Name' \
+            --output text 2>/dev/null || echo "yugioh-deck-generator")
+          
+          echo "rds_endpoint=${RDS_ENDPOINT}" >> $GITHUB_OUTPUT
+          echo "s3_bucket=${S3_BUCKET}" >> $GITHUB_OUTPUT
+
+      - name: Set up environment variables
+        run: |
+          echo "MLFLOW_DB_PASSWORD=${{ secrets.MLFLOW_DB_PASSWORD }}" >> $GITHUB_ENV
+          echo "RDS_ENDPOINT=${{ steps.infra-info.outputs.rds_endpoint }}" >> $GITHUB_ENV
+          echo "S3_BUCKET=${{ steps.infra-info.outputs.s3_bucket }}" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${{ secrets.AWS_DEFAULT_REGION }}" >> $GITHUB_ENV
+
+      - name: Start MLflow service
+        run: |
+          # Check if MLflow is already running and healthy
+          if docker compose -f docker-compose.local-mlflow.yml ps mlflow-local | grep -q "healthy"; then
+            echo "MLflow is already running and healthy!"
+          else
+            echo "Starting MLflow server..."
+            
+            # Clean up any existing containers
+            docker compose -f docker-compose.local-mlflow.yml down mlflow-local 2>/dev/null || true
+            
+            # Start MLflow
+            docker compose -f docker-compose.local-mlflow.yml up -d mlflow-local
+            
+            # Wait for MLflow to be healthy using Docker health check
+            echo "Waiting for MLflow to be healthy..."
+            RETRY_COUNT=0
+            MAX_RETRIES=30  # 30 * 10 seconds = 5 minutes
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              HEALTH_STATUS=$(docker compose -f docker-compose.local-mlflow.yml ps mlflow-local --format "{{.Health}}" 2>/dev/null || echo "starting")
+              
+              case $HEALTH_STATUS in
+                "healthy")
+                  echo "MLflow is healthy!"
+                  break
+                  ;;
+                "unhealthy")
+                  echo "MLflow container is unhealthy. Showing logs:"
+                  docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=50
+                  exit 1
+                  ;;
+                *)
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                  echo "Attempt $RETRY_COUNT/$MAX_RETRIES: MLflow status: $HEALTH_STATUS, waiting 10 seconds..."
+                  
+                  # Show container logs periodically
+                  if [ $((RETRY_COUNT % 6)) -eq 0 ]; then  # Every minute
+                    echo "Container logs (last 20 lines):"
+                    docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=20
+                  fi
+                  
+                  sleep 10
+                  ;;
+              esac
+            done
+            
+            # Final check
+            FINAL_STATUS=$(docker compose -f docker-compose.local-mlflow.yml ps mlflow-local --format "{{.Health}}" 2>/dev/null || echo "unknown")
+            if [ "$FINAL_STATUS" != "healthy" ]; then
+              echo "MLflow failed to become healthy within timeout. Final status: $FINAL_STATUS"
+              echo "Final container logs:"
+              docker compose -f docker-compose.local-mlflow.yml logs mlflow-local
+              echo ""
+              echo "Container status:"
+              docker compose -f docker-compose.local-mlflow.yml ps mlflow-local
+              
+              echo "Attempting to start MLflow with local file backend as fallback..."
+              docker compose -f docker-compose.local-mlflow.yml down mlflow-local
+              
+              # Start a simple MLflow server with file backend for CI testing
+              docker run -d --name mlflow-fallback \
+                --network host \
+                -v $PWD:/workspace \
+                -w /workspace \
+                python:3.9-slim \
+                bash -c "pip install mlflow==2.8.1 && mlflow server --host 0.0.0.0 --port 5000"
+              
+              # Wait for fallback server
+              echo "Waiting for fallback MLflow server..."
+              for i in {1..30}; do
+                if curl -f -s http://localhost:5000/ >/dev/null 2>&1; then
+                  echo "Fallback MLflow server is ready!"
+                  break
+                fi
+                echo "Waiting for fallback server... attempt $i/30"
+                sleep 5
+              done
+              
+              # Check if fallback worked
+              if ! curl -f -s http://localhost:5000/ >/dev/null 2>&1; then
+                echo "Even fallback MLflow server failed to start"
+                docker logs mlflow-fallback || true
+                exit 1
+              fi
+            fi
+          fi
+
+      - name: Verify MLflow connection
+        run: |
+          echo "Verifying MLflow server connection..."
+          
+          # Wait a bit more for MLflow to fully initialize
+          echo "Giving MLflow additional time to fully initialize..."
+          sleep 10
+          
+          # Test basic connectivity with retries
+          RETRY_COUNT=0
+          MAX_RETRIES=10
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -f -s http://localhost:5000/ >/dev/null 2>&1; then
+              echo "Basic connectivity test passed!"
+              break
+            fi
+            
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Connectivity attempt $RETRY_COUNT/$MAX_RETRIES failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "Basic connectivity test failed after $MAX_RETRIES attempts"
+            echo "Container logs:"
+            docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=30
+            exit 1
+          fi
+          
+          # Test MLflow API with retries
+          echo "Testing MLflow API..."
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            # First try a simpler endpoint to check if MLflow is responding
+            if curl -f -s "http://localhost:5000/version" >/dev/null 2>&1; then
+              echo "MLflow version endpoint responded successfully!"
+              
+              # Now test the experiments endpoint
+              if curl -f -s "http://localhost:5000/api/2.0/mlflow/experiments/search?max_results=1" >/dev/null 2>&1; then
+                echo "MLflow API test passed!"
+                break
+              else
+                echo "Experiments API not ready yet..."
+              fi
+            else
+              echo "MLflow version endpoint not responding yet..."
+            fi
+            
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "API test attempt $RETRY_COUNT/$MAX_RETRIES failed, retrying in 5 seconds..."
+            sleep 5
+          done
+          
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "MLflow API test failed after $MAX_RETRIES attempts"
+            echo "Trying to get more details..."
+            echo "Testing version endpoint:"
+            curl -v "http://localhost:5000/version" || true
+            echo ""
+            echo "Testing experiments endpoint:"
+            curl -v "http://localhost:5000/api/2.0/mlflow/experiments/search?max_results=1" || true
+            echo "Container logs:"
+            docker compose -f docker-compose.local-mlflow.yml logs mlflow-local --tail=30
+            exit 1
+          fi
+          
+          echo "MLflow server is healthy and API is responding!"
+
+      - name: Show container status
+        run: |
+          echo "Current container status:"
+          docker compose -f docker-compose.local-mlflow.yml ps
+          echo ""
+          echo "Docker system info:"
+          docker system df
+
+      - name: Run clustering experiment
+        run: |
+          echo "Building clustering image..."
+          docker compose -f docker-compose.local-mlflow.yml build clustering
+          
+          echo "Running clustering experiment with parameters:"
+          echo "  Feature type: ${{ matrix.feature_type }}"
+          echo "  Config: ${{ matrix.config }}"
+          echo "  Force register: ${{ github.event.inputs.force_register }}"
+          
+          # Run clustering with matrix parameters
+          # Both MLflow servers are accessible on localhost:5000 due to host networking
+          docker compose -f docker-compose.local-mlflow.yml run --rm clustering \
+            python src/model/clustering/hdbscan-clustering.py \
+            --feature-type ${{ matrix.feature_type }} \
+            --experiment-config ${{ matrix.config }} \
+            ${{ github.event.inputs.force_register == 'true' && '--force-register' || '' }}
+          
+          echo "Clustering experiment completed successfully!"
+
+      - name: Check MLflow experiments
+        if: always()
+        run: |
+          echo "Checking MLflow experiments and overall health..."
+          
+          echo "1. Testing basic connectivity:"
+          curl -s http://localhost:5000/ | head -5 || echo "Root endpoint failed"
+          
+          echo "2. Testing MLflow version:"
+          curl -s http://localhost:5000/version || echo "Version endpoint failed"
+          
+          echo "3. Testing experiments list:"
+          curl -s "http://localhost:5000/api/2.0/mlflow/experiments/search?max_results=5" | jq '.' || echo "Experiments endpoint failed"
+          
+          echo "4. Testing experiment creation (should work):"
+          curl -s -X POST "http://localhost:5000/api/2.0/mlflow/experiments/create" \
+            -H "Content-Type: application/json" \
+            -d '{"name": "test-experiment-'$(date +%s)'"}' | jq '.' || echo "Experiment creation failed"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up containers..."
+          docker compose -f docker-compose.local-mlflow.yml down || true
+          docker stop mlflow-fallback 2>/dev/null || true
+          docker rm mlflow-fallback 2>/dev/null || true
+          docker system prune -f

@@ -1,0 +1,34 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowSetupMlflowFullAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::256995722813:role/setup-mlflow"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EnableRootUserPermissions",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::256995722813:root"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowDescribeKeyForRootUser",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::256995722813:user/root"
+      },
+      "Action": "kms:DescribeKey",
+      "Resource": "*"
+    }
+  ]
+}
+
+
