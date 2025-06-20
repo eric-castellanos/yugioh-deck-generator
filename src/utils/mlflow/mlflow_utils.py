@@ -1024,9 +1024,9 @@ def log_deck_metrics(
     # Card type ratios for main deck
     total_main = len(main_deck)
     if total_main > 0:
-        monster_count = sum(1 for card in main_deck if card.get('type') in ['Monster', 'Ritual Monster'])
-        spell_count = sum(1 for card in main_deck if card.get('type') == 'Spell')
-        trap_count = sum(1 for card in main_deck if card.get('type') == 'Trap')
+        monster_count = sum(1 for card in main_deck if card.get('type') and 'Monster' in card.get('type'))
+        spell_count = sum(1 for card in main_deck if card.get('type') and 'Spell' in card.get('type'))
+        trap_count = sum(1 for card in main_deck if card.get('type') and 'Trap' in card.get('type'))
         
         mlflow.log_metric("monster_ratio", monster_count / total_main)
         mlflow.log_metric("spell_ratio", spell_count / total_main)

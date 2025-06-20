@@ -61,9 +61,9 @@ class DeckMetadata:
         self.clustered_cards = clustered_cards
         
         # Calculate basic stats
-        self.monster_count = sum(1 for card in main_deck if card.get('type') in ['Monster', 'Ritual Monster'])
-        self.spell_count = sum(1 for card in main_deck if card.get('type') == 'Spell')
-        self.trap_count = sum(1 for card in main_deck if card.get('type') == 'Trap')
+        self.monster_count = sum(1 for card in main_deck if card.get('type') and 'Monster' in card.get('type'))
+        self.spell_count = sum(1 for card in main_deck if card.get('type') and 'Spell' in card.get('type'))
+        self.trap_count = sum(1 for card in main_deck if card.get('type') and 'Trap' in card.get('type'))
         
         # Calculate archetype distribution
         self.archetype_distribution = self._calculate_archetype_distribution()
@@ -169,8 +169,13 @@ class SimpleDeckGenerator:
         self.trap_clusters = {}
         
         # Define card types for main and extra deck
-        main_deck_types = ['Monster', 'Spell', 'Trap', 'Ritual Monster']
+        main_deck_monster_types = ['Monster', 'Effect Monster', 'Normal Monster', 'Ritual Monster', 'Pendulum Effect Monster', 'Pendulum Normal Monster', 'Gemini Monster', 'Spirit Monster', 'Toon Monster', 'Tuner Monster', 'Union Monster', 'Flip Effect Monster']
+        main_deck_spell_types = ['Spell Card', 'Spell']
+        main_deck_trap_types = ['Trap Card', 'Trap']
         extra_deck_types = ['Fusion Monster', 'Synchro Monster', 'Xyz Monster', 'Link Monster', 'Pendulum Monster']
+        
+        # Define combined list of all main deck types
+        main_deck_types = main_deck_monster_types + main_deck_spell_types + main_deck_trap_types
         
         for cluster_id, cards in clustered_cards.items():
             main_cards = [c for c in cards if c.get('type') in main_deck_types]
@@ -180,9 +185,9 @@ class SimpleDeckGenerator:
                 self.main_deck_clusters[cluster_id] = main_cards
                 
                 # Separate by card type for ratio enforcement
-                monsters = [c for c in main_cards if c.get('type') in ['Monster', 'Ritual Monster']]
-                spells = [c for c in main_cards if c.get('type') == 'Spell']
-                traps = [c for c in main_cards if c.get('type') == 'Trap']
+                monsters = [c for c in main_cards if c.get('type') in main_deck_monster_types]
+                spells = [c for c in main_cards if c.get('type') in main_deck_spell_types]
+                traps = [c for c in main_cards if c.get('type') in main_deck_trap_types]
                 
                 if monsters:
                     self.monster_clusters[cluster_id] = monsters
@@ -223,9 +228,9 @@ class SimpleDeckGenerator:
         if deck_size == 0:
             return {'monster_ratio': 0.0, 'spell_ratio': 0.0, 'trap_ratio': 0.0}
             
-        monster_count = sum(1 for card in deck if card.get('type') in ['Monster', 'Ritual Monster'])
-        spell_count = sum(1 for card in deck if card.get('type') == 'Spell')
-        trap_count = sum(1 for card in deck if card.get('type') == 'Trap')
+        monster_count = sum(1 for card in deck if card.get('type') and 'Monster' in card.get('type'))
+        spell_count = sum(1 for card in deck if card.get('type') and 'Spell' in card.get('type'))
+        trap_count = sum(1 for card in deck if card.get('type') and 'Trap' in card.get('type'))
         
         return {
             'monster_ratio': monster_count / deck_size,
