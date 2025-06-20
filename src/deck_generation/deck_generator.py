@@ -199,11 +199,30 @@ class SimpleDeckGenerator:
             if extra_cards:
                 self.extra_deck_clusters[cluster_id] = extra_cards
         
-        # Define main deck ratios (60% monsters, 20% spells, 20% traps, ±15% tolerance)
-        self.target_monster_ratio = 0.6
-        self.target_spell_ratio = 0.2
-        self.target_trap_ratio = 0.2
+        # Define main deck ratios with fluctuation from 60/20/20 baseline (±15% tolerance)
+        # Apply a random fluctuation within reasonable bounds
+        fluctuation = random.uniform(-0.1, 0.1)  # Up to ±10% fluctuation
+        
+        # Base ratios
+        base_monster = 0.6
+        base_spell = 0.2
+        base_trap = 0.2
+        
+        # Apply fluctuation primarily to monster ratio, then adjust others proportionally
+        self.target_monster_ratio = max(0.45, min(0.75, base_monster + fluctuation))
+        
+        # Distribute remaining percentage between spells and traps proportionally
+        remaining = 1.0 - self.target_monster_ratio
+        spell_weight = base_spell / (base_spell + base_trap)
+        trap_weight = base_trap / (base_spell + base_trap)
+        
+        self.target_spell_ratio = remaining * spell_weight
+        self.target_trap_ratio = remaining * trap_weight
+        
+        # Keep the standard tolerance
         self.ratio_tolerance = 0.15
+        
+        logger.info(f"Deck ratios set to: {self.target_monster_ratio:.1%}M/{self.target_spell_ratio:.1%}S/{self.target_trap_ratio:.1%}T (±{self.ratio_tolerance:.0%} tolerance)")
     
     def _calculate_target_counts(self, deck_size: int = 40) -> Tuple[int, int, int]:
         """Calculate target counts for each card type based on ratios."""
@@ -247,6 +266,38 @@ class SimpleDeckGenerator:
         trap_ok = abs(ratios['trap_ratio'] - self.target_trap_ratio) <= self.ratio_tolerance
         
         return monster_ok and spell_ok and trap_ok
+    
+    def _randomize_ratios(self):
+        """Randomize the deck ratios for each deck generation to ensure variety."""
+        # Apply a stronger random fluctuation for more variation between decks
+        fluctuation = random.uniform(-0.15, 0.15)  # Up to ±15% fluctuation
+        
+        # Base ratios
+        base_monster = 0.6
+        base_spell = 0.2
+        base_trap = 0.2
+        
+        # Apply fluctuation primarily to monster ratio, with wider bounds
+        # Min 40% monsters, max 80% monsters for greater variety
+        self.target_monster_ratio = max(0.4, min(0.8, base_monster + fluctuation))
+        
+        # Distribute remaining percentage between spells and traps
+        # Apply additional variation to their distribution
+        remaining = 1.0 - self.target_monster_ratio
+        spell_trap_variation = random.uniform(-0.2, 0.2)  # This shifts the balance between spells and traps
+        
+        # Baseline weights
+        spell_weight = 0.5 + spell_trap_variation  # Can shift between 0.3 and 0.7 of remaining
+        spell_weight = max(0.3, min(0.7, spell_weight))  # Cap between 30% and 70% of remaining
+        trap_weight = 1.0 - spell_weight
+        
+        self.target_spell_ratio = remaining * spell_weight
+        self.target_trap_ratio = remaining * trap_weight
+        
+        # Keep the standard tolerance
+        self.ratio_tolerance = 0.15
+        
+        logger.info(f"Deck ratios randomized to: {self.target_monster_ratio:.1%}M/{self.target_spell_ratio:.1%}S/{self.target_trap_ratio:.1%}T (±{self.ratio_tolerance:.0%} tolerance)")
     
     def generate_deck(self, mode: str = "novel", target_archetype: Optional[str] = None, 
                      use_mlflow: bool = True) -> Tuple[List[Dict], List[Dict], DeckMetadata]:
@@ -298,6 +349,9 @@ class SimpleDeckGenerator:
     
     def _generate_deck_internal(self, mode: str, target_archetype: Optional[str] = None) -> Tuple[List[Dict], List[Dict], DeckMetadata]:
         """Internal deck generation logic without MLflow tracking."""
+        # Randomize ratios for each deck generation
+        self._randomize_ratios()
+        
         if mode == "meta_aware":
             if not target_archetype:
                 raise ValueError("target_archetype is required for meta_aware mode")
@@ -759,12 +813,10 @@ if __name__ == "__main__":
     import csv
     import pandas as pd
     import tempfile
-    import mlflow
     from collections import Counter
+    import mlflow
     from src.utils.mlflow.mlflow_utils import (
         setup_deck_generation_experiment,
-        log_deck_generation_tags,
-        log_deck_generation_params,
         MLFLOW_TRACKING_URI
     )
     
@@ -786,13 +838,15 @@ if __name__ == "__main__":
     with mlflow.start_run(experiment_id=experiment_id) as run:
         log_deck_generation_tags(
             generation_mode="novel",
+            stage="production",
             version="v1.0",
-            stage="production"
+            batch_generation=True,
+            num_decks=10
         )
         
         log_deck_generation_params(
+            generation_mode="novel",
             deck_count=10,
-            mode="novel",
             min_cards=40,
             max_cards=60
         )
@@ -810,23 +864,32 @@ if __name__ == "__main__":
         for i in range(10):
             print(f"\nGenerating Deck #{i+1}...")
             
-            # Generate a novel deck without using internal MLflow tracking
-            # (We'll handle logging ourselves in the parent run)
+            # Generate a novel deck without nested MLflow tracking
             try:
-                main_deck, extra_deck, metadata = generator.generate_deck(
-                    mode="novel", 
-                    use_mlflow=False  # Disable internal MLflow tracking
-                )
+                main_deck, extra_deck, metadata = generator.generate_deck("novel", use_mlflow=False)
+                
+                # Calculate card type ratios
+                main_deck_size = len(main_deck)
+                monster_ratio = metadata.monster_count / main_deck_size if main_deck_size > 0 else 0
+                spell_ratio = metadata.spell_count / main_deck_size if main_deck_size > 0 else 0
+                trap_ratio = metadata.trap_count / main_deck_size if main_deck_size > 0 else 0
+                
+                # Check if ratios are within tolerance
+                is_within_tolerance = generator._is_ratio_acceptable(main_deck)
                 
                 # Store deck info for collection artifact
                 deck_info = {
                     "deck_id": i+1,
-                    "main_deck_size": len(main_deck),
+                    "main_deck_size": main_deck_size,
                     "extra_deck_size": len(extra_deck),
-                    "dominant_archetype": metadata.dominant_archetype if metadata.dominant_archetype != "Unknown" else "Generic",
+                    "dominant_archetype": metadata.dominant_archetype,
                     "monster_count": metadata.monster_count,
                     "spell_count": metadata.spell_count,
                     "trap_count": metadata.trap_count,
+                    "monster_ratio": round(monster_ratio, 2),
+                    "spell_ratio": round(spell_ratio, 2),
+                    "trap_ratio": round(trap_ratio, 2),
+                    "within_tolerance": is_within_tolerance,
                     "cluster_entropy": metadata.cluster_entropy,
                 }
                 
@@ -835,30 +898,28 @@ if __name__ == "__main__":
                     "deck_id": i+1,
                     "main_deck": main_deck,
                     "extra_deck": extra_deck,
-                    "metadata": metadata.to_dict() if hasattr(metadata, "to_dict") else metadata.__dict__
+                    "metadata": metadata.to_dict() if hasattr(metadata, "to_dict") else metadata.__dict__,
+                    "ratios": {
+                        "monster_ratio": monster_ratio,
+                        "spell_ratio": spell_ratio,
+                        "trap_ratio": trap_ratio,
+                        "within_tolerance": is_within_tolerance
+                    }
                 })
                 
+                tolerance_status = "✅ Within ±15% tolerance" if is_within_tolerance else "❗ Outside ±15% tolerance"
+                target_ratios = f"Target: {generator.target_monster_ratio:.0%}M/{generator.target_spell_ratio:.0%}S/{generator.target_trap_ratio:.0%}T"
+                actual_ratios = f"Actual: {monster_ratio:.0%}M/{spell_ratio:.0%}S/{trap_ratio:.0%}T"
+                
                 print(f"✅ Deck #{i+1} generated successfully:")
-                print(f"   - Main deck: {len(main_deck)} cards")
+                print(f"   - Main deck: {main_deck_size} cards")
                 print(f"   - Extra deck: {len(extra_deck)} cards")
                 print(f"   - Dominant archetype: {metadata.dominant_archetype}")
                 print(f"   - Monster/Spell/Trap: {metadata.monster_count}/{metadata.spell_count}/{metadata.trap_count}")
+                print(f"   - {target_ratios}, {actual_ratios}")
+                print(f"   - {tolerance_status}")
                 print(f"   - Cluster entropy: {metadata.cluster_entropy:.2f}")
                 
-                # Log individual deck metrics to MLflow
-                with mlflow.start_run(nested=True) as child_run:
-                    mlflow.log_param("deck_id", i+1)
-                    mlflow.log_param("dominant_archetype", metadata.dominant_archetype)
-                    mlflow.log_metric("main_deck_size", len(main_deck))
-                    mlflow.log_metric("extra_deck_size", len(extra_deck))
-                    mlflow.log_metric("monster_count", metadata.monster_count)
-                    mlflow.log_metric("spell_count", metadata.spell_count)
-                    mlflow.log_metric("trap_count", metadata.trap_count)
-                    mlflow.log_metric("cluster_entropy", metadata.cluster_entropy)
-                    
-                    # Log this individual deck as artifacts
-                    log_deck_artifacts(main_deck, extra_deck, metadata)
-                    
             except Exception as e:
                 print(f"❌ Failed to generate deck #{i+1}: {e}")
                 continue
@@ -876,50 +937,66 @@ if __name__ == "__main__":
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
             fieldnames = [
                 "deck_id", "main_deck_size", "extra_deck_size", "dominant_archetype", 
-                "monster_count", "spell_count", "trap_count", "cluster_entropy"
+                "monster_count", "spell_count", "trap_count", "monster_ratio", "spell_ratio", "trap_ratio",
+                "within_tolerance", "cluster_entropy"
             ]
             writer = csv.DictWriter(tmp_file, fieldnames=fieldnames)
             writer.writeheader()
+            
             for deck_info in deck_summaries:
                 writer.writerow(deck_info)
+                
             tmp_file.flush()
             mlflow.log_artifact(tmp_file.name, "deck_summaries.csv")
             csv_path = tmp_file.name
         
-        # 3. Convert CSV to a pandas DataFrame and log as a table
-        try:
-            deck_df = pd.read_csv(csv_path)
-            mlflow.log_table(data=deck_df, artifact_file="deck_metrics_table.json")
-        except Exception as e:
-            print(f"Warning: Could not log DataFrame as table: {e}")
+        # 3. Create a pandas DataFrame for visualization
+        df = pd.DataFrame(deck_summaries)
         
-        # Clean up temporary files
-        try:
-            os.unlink(json_path)
-            os.unlink(csv_path)
-        except Exception:
-            pass
-        
-        # Log the number of successful generations as a metric
+        # 4. Log table as artifact
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as tmp_file:
+            df.to_html(tmp_file, index=False)
+            tmp_file.flush()
+            mlflow.log_artifact(tmp_file.name, "deck_metrics_table.html")
+            
+        # Log overall metrics
         mlflow.log_metric("successful_generations", len(deck_summaries))
+        mlflow.log_metric("decks_within_tolerance", sum(d["within_tolerance"] for d in deck_summaries))
         
         # Log overall generation statistics
         if deck_summaries:
             avg_entropy = sum(d["cluster_entropy"] for d in deck_summaries) / len(deck_summaries)
             mlflow.log_metric("average_cluster_entropy", avg_entropy)
             
+            # Calculate average ratios
+            avg_monster_ratio = sum(d["monster_ratio"] for d in deck_summaries) / len(deck_summaries)
+            avg_spell_ratio = sum(d["spell_ratio"] for d in deck_summaries) / len(deck_summaries)
+            avg_trap_ratio = sum(d["trap_ratio"] for d in deck_summaries) / len(deck_summaries)
+            
+            mlflow.log_metric("average_monster_ratio", avg_monster_ratio)
+            mlflow.log_metric("average_spell_ratio", avg_spell_ratio)
+            mlflow.log_metric("average_trap_ratio", avg_trap_ratio)
+            
             # Count most common archetypes
             archetype_counter = Counter(d["dominant_archetype"] for d in deck_summaries)
             most_common_archetype, most_common_count = archetype_counter.most_common(1)[0]
             mlflow.log_param("most_common_archetype", most_common_archetype)
             mlflow.log_metric("most_common_archetype_count", most_common_count)
+            
+            # Create artifact links for easy access
+            print(f"\nArtifact links:")
+            print(f"- All decks JSON: {mlflow.get_artifact_uri()}/all_decks.json")
+            print(f"- Deck summaries CSV: {mlflow.get_artifact_uri()}/deck_summaries.csv")
+            print(f"- Deck metrics table: {mlflow.get_artifact_uri()}/deck_metrics_table.html")
         
         print("\n=== Deck Generation Complete ===")
         print(f"✅ Successfully generated {len(deck_summaries)} of 10 decks")
+        print(f"✅ {sum(d['within_tolerance'] for d in deck_summaries)} decks are within ±15% tolerance")
         print(f"✅ All decks and metrics logged to MLflow run: {run.info.run_id}")
         print(f"✅ MLflow UI: {MLFLOW_TRACKING_URI}/#/experiments/{experiment_id}")
         
         if deck_summaries:
             print("\nSummary Statistics:")
+            print(f"- Average ratios: {avg_monster_ratio:.2f}M/{avg_spell_ratio:.2f}S/{avg_trap_ratio:.2f}T")
             print(f"- Average cluster entropy: {avg_entropy:.2f}")
             print(f"- Most common archetype: {most_common_archetype} ({most_common_count} decks)")
