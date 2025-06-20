@@ -1069,6 +1069,11 @@ def log_deck_metrics(
     cluster_dist = metadata_dict.get('cluster_distribution', {})
     if cluster_dist:
         mlflow.log_metric("cluster_diversity", len(cluster_dist))
+    
+    # Log new novelty metrics
+    mlflow.log_metric("intra_deck_cluster_distance", metadata_dict.get('intra_deck_cluster_distance', 0.0))
+    mlflow.log_metric("cluster_co_occurrence_rarity", metadata_dict.get('cluster_co_occurrence_rarity', 0.0))
+    mlflow.log_metric("noise_card_percentage", metadata_dict.get('noise_card_percentage', 0.0))
 
 
 def log_deck_artifacts(

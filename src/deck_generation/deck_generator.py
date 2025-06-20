@@ -10,6 +10,7 @@ from collections import Counter
 import random
 import math
 import logging
+import numpy as np
 from enum import Enum
 
 # MLflow imports
@@ -73,6 +74,11 @@ class DeckMetadata:
         self.cluster_distribution = self._calculate_cluster_distribution()
         self.cluster_entropy = self._calculate_cluster_entropy()
         
+        # Calculate novelty metrics
+        self.intra_deck_cluster_distance = calculate_intra_deck_cluster_distance(main_deck, clustered_cards)
+        self.cluster_co_occurrence_rarity = calculate_cluster_co_occurrence_rarity(main_deck, clustered_cards)
+        self.noise_card_percentage = calculate_noise_card_percentage(main_deck)
+        
     def _calculate_archetype_distribution(self) -> Dict[str, int]:
         """Calculate archetype distribution in the deck."""
         archetype_counts = Counter()
@@ -129,6 +135,9 @@ class DeckMetadata:
             'dominant_archetype': self.dominant_archetype,
             'cluster_distribution': self.cluster_distribution,
             'cluster_entropy': self.cluster_entropy,
+            'intra_deck_cluster_distance': self.intra_deck_cluster_distance,
+            'cluster_co_occurrence_rarity': self.cluster_co_occurrence_rarity,
+            'noise_card_percentage': self.noise_card_percentage,
             'main_deck_size': len(self.main_deck),
             'extra_deck_size': len(self.extra_deck)
         }
@@ -731,272 +740,194 @@ class SimpleDeckGenerator:
         return extra_deck[:target_size]
 
 
-# Convenience function for quick deck generation
-def generate_deck(clustered_cards: Optional[Dict[int, List[Dict]]] = None,
-                 mode: str = "novel", 
-                 target_archetype: Optional[str] = None,
-                 use_mlflow: bool = True,
-                 load_from_registry: bool = True,
-                 num_cards: int = 40) -> Tuple[List[Dict], List[Dict], DeckMetadata]:
+# Novelty Metrics Functions
+def calculate_cluster_entropy(deck: List[Dict]) -> float:
     """
-    Quick deck generation function with MLflow integration.
-    
+    Calculate the Shannon entropy of cluster distribution in a deck.
+    Higher values indicate a more diverse set of clusters.
+
     Args:
-        clustered_cards: Dictionary mapping cluster IDs to lists of card dictionaries.
-                        If None and load_from_registry=True, will load from MLflow model registry.
-        mode: Generation mode ("meta_aware" or "novel")
-        target_archetype: Target archetype for meta_aware mode
-        use_mlflow: Whether to use MLflow experiment tracking
-        load_from_registry: Whether to load clustered cards from MLflow model registry
-        
+        deck: List of card dictionaries representing a deck
+
     Returns:
-        Tuple of (main_deck, extra_deck, metadata)
+        Entropy score measuring cluster diversity
     """
-    # Load clustered cards from MLflow model registry if needed
-    if clustered_cards is None and load_from_registry:
-        try:
-            logger.info("Loading clustered cards from MLflow model registry")
-            
-            # Get card data with cluster assignments from the model
-            clustered_cards = get_card_data_with_clusters()
-            logger.info(f"Loaded clustered cards: {len(clustered_cards)} clusters")
-            
-        except Exception as e:
-            logger.error(f"Failed to load clustering model or generate clustered cards: {e}")
-            logger.error("This could mean the clustering model is not registered or card data is not accessible")
-            raise ValueError("No clustered cards provided and failed to load clustered cards from MLflow model. "
-                           "Please provide clustered_cards parameter or ensure MLflow model registry is accessible.")
+    # Count occurrences of each cluster in the deck
+    cluster_counts = Counter([card.get('cluster_id', -1) for card in deck])
     
-    if clustered_cards is None:
-        raise ValueError("clustered_cards parameter is required when load_from_registry=False")
+    # Calculate Shannon entropy
+    total_cards = len(deck)
+    entropy = 0.0
     
-    generator = SimpleDeckGenerator(clustered_cards, num_cards=num_cards)
-    return generator.generate_deck(mode, target_archetype, use_mlflow)
+    for count in cluster_counts.values():
+        if count > 0:
+            probability = count / total_cards
+            entropy -= probability * math.log2(probability)
+    
+    return entropy
 
-
-def generate_deck_from_registry(mode: str = "novel", 
-                               target_archetype: Optional[str] = None,
-                               experiment_name: str = "yugioh_deck_generation",
-                               num_cards: int = 40) -> Tuple[List[Dict], List[Dict], DeckMetadata]:
+def calculate_intra_deck_cluster_distance(deck: List[Dict], clustered_cards: Dict[int, List[Dict]]) -> float:
     """
-    Generate a deck using clustered cards loaded from MLflow model registry.
-    
-    This is the recommended function for production use as it ensures
-    the deck generation uses the latest trained clustering model.
-    
+    Calculate the average distance between clusters used in the deck.
+    Higher values indicate more surprising combinations.
+
     Args:
-        mode: Generation mode ("meta_aware" or "novel")
-        target_archetype: Target archetype for meta_aware mode
-        experiment_name: MLflow experiment name
-        num_cards: Number of cards in the main deck
-        
+        deck: List of card dictionaries representing a deck
+        clustered_cards: Dictionary mapping cluster IDs to lists of card dictionaries
+
     Returns:
-        Tuple of (main_deck, extra_deck, metadata)
+        Average distance between clusters in the deck
     """
-    # Set the experiment by name explicitly
-    from src.utils.mlflow.mlflow_utils import setup_deck_generation_experiment
-    setup_deck_generation_experiment(experiment_name)
+    # Get unique clusters in the deck
+    deck_clusters = list(set([card.get('cluster_id', -1) for card in deck]))
     
-    return generate_deck(
-        clustered_cards=None,
-        mode=mode,
-        target_archetype=target_archetype,
-        use_mlflow=True,
-        load_from_registry=True,
-        num_cards=num_cards
-    )
+    # Need at least 2 clusters to measure distance
+    if len(deck_clusters) < 2:
+        return 0.0
+    
+    # Extract feature vectors for cards by cluster
+    cluster_vectors = {}
+    
+    # For each cluster in the deck, calculate its average feature vector
+    for cluster_id in deck_clusters:
+        # Get all cards for this cluster from the deck
+        cluster_cards = [card for card in deck if card.get('cluster_id', -1) == cluster_id]
+        
+        # Skip if no cards found for this cluster (shouldn't happen)
+        if not cluster_cards:
+            continue
+        
+        # For each card, extract its represented features
+        # Since we might not have feature vectors directly, we'll use a card's properties as a proxy
+        # using numerical values + one-hot encoding of categorical fields
+        card_features = []
+        for card in cluster_cards:
+            features = []
+            # Add level/rank if it exists (for monsters)
+            if 'level' in card:
+                features.append(card.get('level', 0))
+            # Add ATK/DEF (for monsters)
+            if 'atk' in card:
+                features.append(card.get('atk', 0))
+            if 'def' in card:
+                features.append(card.get('def', 0))
+            # Add pendulum scales if they exist
+            if 'scale' in card:
+                features.append(card.get('scale', 0))
+            # Add card type as one-hot encoding (simplified)
+            if 'Monster' in card.get('type', ''):
+                features.append(1)
+            else:
+                features.append(0)
+            if 'Spell' in card.get('type', ''):
+                features.append(1)
+            else:
+                features.append(0)
+            if 'Trap' in card.get('type', ''):
+                features.append(1)
+            else:
+                features.append(0)
+            
+            # Only add this card if we have at least some features
+            if features:
+                card_features.append(features)
+        
+        # Skip if no features found for any card in this cluster
+        if not card_features:
+            continue
+        
+        # Calculate average feature vector for this cluster
+        cluster_vectors[cluster_id] = np.mean(card_features, axis=0)
+    
+    # Calculate pairwise distances between cluster vectors
+    total_distance = 0.0
+    pair_count = 0
+    
+    for i, cluster_id1 in enumerate(cluster_vectors.keys()):
+        for j, cluster_id2 in enumerate(cluster_vectors.keys()):
+            if i < j:  # Only calculate each pair once
+                # Euclidean distance between cluster vectors
+                vec1 = cluster_vectors[cluster_id1]
+                vec2 = cluster_vectors[cluster_id2]
+                
+                # Only calculate distance if vectors have the same shape
+                if len(vec1) == len(vec2):
+                    distance = np.linalg.norm(vec1 - vec2)
+                    total_distance += distance
+                    pair_count += 1
+    
+    # Return average distance
+    if pair_count > 0:
+        return total_distance / pair_count
+    else:
+        return 0.0
 
+def calculate_cluster_co_occurrence_rarity(deck: List[Dict], clustered_cards: Dict[int, List[Dict]]) -> float:
+    """
+    Calculate the rarity of cluster co-occurrences in the deck.
+    Higher values indicate more surprising/novel combinations.
 
-if __name__ == "__main__":
-    import os
-    import json
-    import csv
-    import pandas as pd
-    import tempfile
-    from collections import Counter
-    import mlflow
-    from src.utils.mlflow.mlflow_utils import (
-        setup_deck_generation_experiment,
-        MLFLOW_TRACKING_URI
-    )
+    Args:
+        deck: List of card dictionaries representing a deck
+        clustered_cards: Dictionary mapping cluster IDs to lists of card dictionaries
+
+    Returns:
+        Rarity score for cluster co-occurrences
+    """
+    # Get unique clusters in the deck
+    deck_clusters = list(set([card.get('cluster_id', -1) for card in deck]))
     
-    print("===== Yu-Gi-Oh! Deck Generator - Generating 10 Decks =====")
+    # Need at least 2 clusters to measure co-occurrence
+    if len(deck_clusters) < 2:
+        return 0.0
     
-    # Set up MLflow experiment
-    experiment_id = setup_deck_generation_experiment("yugioh_deck_generation")
+    # Calculate total number of cards in the dataset
+    total_cards_in_dataset = sum(len(cards) for cards in clustered_cards.values())
     
-    # Load the clustered card data from the MLflow model registry
-    print("Loading clustered cards from MLflow model registry...")
-    try:
-        clustered_cards = get_card_data_with_clusters()
-        print(f"✅ Successfully loaded {len(clustered_cards)} card clusters")
-    except Exception as e:
-        print(f"❌ Failed to load clusters: {e}")
-        exit(1)
+    # Calculate rarity scores for each cluster pair
+    pair_rarities = []
     
-    # Start an MLflow run for generating and tracking multiple decks
-    with mlflow.start_run(experiment_id=experiment_id) as run:
-        log_deck_generation_tags(
-            generation_mode="novel",
-            stage="production",
-            version="v1.0",
-            batch_generation=True,
-            num_decks=10
-        )
-        
-        log_deck_generation_params(
-            generation_mode="novel",
-            deck_count=10,
-            min_cards=40,
-            max_cards=60
-        )
-        
-        print("\n=== Generating 10 Decks from Clustering Model ===")
-        
-        # Initialize deck generator with the loaded clusters
-        generator = SimpleDeckGenerator(clustered_cards)
-        
-        # Lists to store all generated decks and their metadata
-        all_decks = []
-        deck_summaries = []
-        
-        # Generate 10 decks
-        for i in range(10):
-            print(f"\nGenerating Deck #{i+1}...")
-            
-            # Generate a novel deck without nested MLflow tracking
-            try:
-                main_deck, extra_deck, metadata = generator.generate_deck("novel", use_mlflow=False)
+    for i, cluster_id1 in enumerate(deck_clusters):
+        for j, cluster_id2 in enumerate(deck_clusters):
+            if i < j:  # Only calculate each pair once
+                # Calculate the expected co-occurrence by chance
+                cluster1_size = len(clustered_cards.get(cluster_id1, []))
+                cluster2_size = len(clustered_cards.get(cluster_id2, []))
                 
-                # Calculate card type ratios
-                main_deck_size = len(main_deck)
-                monster_ratio = metadata.monster_count / main_deck_size if main_deck_size > 0 else 0
-                spell_ratio = metadata.spell_count / main_deck_size if main_deck_size > 0 else 0
-                trap_ratio = metadata.trap_count / main_deck_size if main_deck_size > 0 else 0
+                # Skip if either cluster doesn't exist in the data
+                if cluster1_size == 0 or cluster2_size == 0:
+                    continue
                 
-                # Check if ratios are within tolerance
-                is_within_tolerance = generator._is_ratio_acceptable(main_deck)
+                # Probability of these clusters co-occurring by random chance
+                # P(A and B) = P(A) * P(B) if independent
+                p_cluster1 = cluster1_size / total_cards_in_dataset
+                p_cluster2 = cluster2_size / total_cards_in_dataset
+                expected_co_occurrence = p_cluster1 * p_cluster2
                 
-                # Store deck info for collection artifact
-                deck_info = {
-                    "deck_id": i+1,
-                    "main_deck_size": main_deck_size,
-                    "extra_deck_size": len(extra_deck),
-                    "dominant_archetype": metadata.dominant_archetype,
-                    "monster_count": metadata.monster_count,
-                    "spell_count": metadata.spell_count,
-                    "trap_count": metadata.trap_count,
-                    "monster_ratio": round(monster_ratio, 2),
-                    "spell_ratio": round(spell_ratio, 2),
-                    "trap_ratio": round(trap_ratio, 2),
-                    "within_tolerance": is_within_tolerance,
-                    "cluster_entropy": metadata.cluster_entropy,
-                }
-                
-                deck_summaries.append(deck_info)
-                all_decks.append({
-                    "deck_id": i+1,
-                    "main_deck": main_deck,
-                    "extra_deck": extra_deck,
-                    "metadata": metadata.to_dict() if hasattr(metadata, "to_dict") else metadata.__dict__,
-                    "ratios": {
-                        "monster_ratio": monster_ratio,
-                        "spell_ratio": spell_ratio,
-                        "trap_ratio": trap_ratio,
-                        "within_tolerance": is_within_tolerance
-                    }
-                })
-                
-                tolerance_status = "✅ Within ±15% tolerance" if is_within_tolerance else "❗ Outside ±15% tolerance"
-                target_ratios = f"Target: {generator.target_monster_ratio:.0%}M/{generator.target_spell_ratio:.0%}S/{generator.target_trap_ratio:.0%}T"
-                actual_ratios = f"Actual: {monster_ratio:.0%}M/{spell_ratio:.0%}S/{trap_ratio:.0%}T"
-                
-                print(f"✅ Deck #{i+1} generated successfully:")
-                print(f"   - Main deck: {main_deck_size} cards")
-                print(f"   - Extra deck: {len(extra_deck)} cards")
-                print(f"   - Dominant archetype: {metadata.dominant_archetype}")
-                print(f"   - Monster/Spell/Trap: {metadata.monster_count}/{metadata.spell_count}/{metadata.trap_count}")
-                print(f"   - {target_ratios}, {actual_ratios}")
-                print(f"   - {tolerance_status}")
-                print(f"   - Cluster entropy: {metadata.cluster_entropy:.2f}")
-                
-            except Exception as e:
-                print(f"❌ Failed to generate deck #{i+1}: {e}")
-                continue
+                # Rarity is inverse of probability (lower probability = higher rarity)
+                # Using log scale to prevent extremely small values
+                rarity = -math.log10(expected_co_occurrence) if expected_co_occurrence > 0 else 10.0  # Cap at 10
+                pair_rarities.append(rarity)
+    
+    # Return average rarity across all pairs
+    if pair_rarities:
+        return sum(pair_rarities) / len(pair_rarities)
+    else:
+        return 0.0
+
+def calculate_noise_card_percentage(deck: List[Dict]) -> float:
+    """
+    Calculate the percentage of cards in the deck that were labeled as noise
+    by the clustering algorithm (cluster_id = -1).
+
+    Args:
+        deck: List of card dictionaries representing a deck
+
+    Returns:
+        Percentage of noise cards in the deck (0.0 to 1.0)
+    """
+    if not deck:
+        return 0.0
         
-        # Log collection of all generated decks as batch artifacts
-        
-        # 1. Save all decks as a single JSON file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
-            json.dump(all_decks, tmp_file, indent=2, default=str)
-            tmp_file.flush()
-            mlflow.log_artifact(tmp_file.name, "all_decks.json")
-            json_path = tmp_file.name
-        
-        # 2. Create a summary CSV with key metrics for each deck
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
-            fieldnames = [
-                "deck_id", "main_deck_size", "extra_deck_size", "dominant_archetype", 
-                "monster_count", "spell_count", "trap_count", "monster_ratio", "spell_ratio", "trap_ratio",
-                "within_tolerance", "cluster_entropy"
-            ]
-            writer = csv.DictWriter(tmp_file, fieldnames=fieldnames)
-            writer.writeheader()
-            
-            for deck_info in deck_summaries:
-                writer.writerow(deck_info)
-                
-            tmp_file.flush()
-            mlflow.log_artifact(tmp_file.name, "deck_summaries.csv")
-            csv_path = tmp_file.name
-        
-        # 3. Create a pandas DataFrame for visualization
-        df = pd.DataFrame(deck_summaries)
-        
-        # 4. Log table as artifact
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as tmp_file:
-            df.to_html(tmp_file, index=False)
-            tmp_file.flush()
-            mlflow.log_artifact(tmp_file.name, "deck_metrics_table.html")
-            
-        # Log overall metrics
-        mlflow.log_metric("successful_generations", len(deck_summaries))
-        mlflow.log_metric("decks_within_tolerance", sum(d["within_tolerance"] for d in deck_summaries))
-        
-        # Log overall generation statistics
-        if deck_summaries:
-            avg_entropy = sum(d["cluster_entropy"] for d in deck_summaries) / len(deck_summaries)
-            mlflow.log_metric("average_cluster_entropy", avg_entropy)
-            
-            # Calculate average ratios
-            avg_monster_ratio = sum(d["monster_ratio"] for d in deck_summaries) / len(deck_summaries)
-            avg_spell_ratio = sum(d["spell_ratio"] for d in deck_summaries) / len(deck_summaries)
-            avg_trap_ratio = sum(d["trap_ratio"] for d in deck_summaries) / len(deck_summaries)
-            
-            mlflow.log_metric("average_monster_ratio", avg_monster_ratio)
-            mlflow.log_metric("average_spell_ratio", avg_spell_ratio)
-            mlflow.log_metric("average_trap_ratio", avg_trap_ratio)
-            
-            # Count most common archetypes
-            archetype_counter = Counter(d["dominant_archetype"] for d in deck_summaries)
-            most_common_archetype, most_common_count = archetype_counter.most_common(1)[0]
-            mlflow.log_param("most_common_archetype", most_common_archetype)
-            mlflow.log_metric("most_common_archetype_count", most_common_count)
-            
-            # Create artifact links for easy access
-            print(f"\nArtifact links:")
-            print(f"- All decks JSON: {mlflow.get_artifact_uri()}/all_decks.json")
-            print(f"- Deck summaries CSV: {mlflow.get_artifact_uri()}/deck_summaries.csv")
-            print(f"- Deck metrics table: {mlflow.get_artifact_uri()}/deck_metrics_table.html")
-        
-        print("\n=== Deck Generation Complete ===")
-        print(f"✅ Successfully generated {len(deck_summaries)} of 10 decks")
-        print(f"✅ {sum(d['within_tolerance'] for d in deck_summaries)} decks are within ±15% tolerance")
-        print(f"✅ All decks and metrics logged to MLflow run: {run.info.run_id}")
-        print(f"✅ MLflow UI: {MLFLOW_TRACKING_URI}/#/experiments/{experiment_id}")
-        
-        if deck_summaries:
-            print("\nSummary Statistics:")
-            print(f"- Average ratios: {avg_monster_ratio:.2f}M/{avg_spell_ratio:.2f}S/{avg_trap_ratio:.2f}T")
-            print(f"- Average cluster entropy: {avg_entropy:.2f}")
-            print(f"- Most common archetype: {most_common_archetype} ({most_common_count} decks)")
+    noise_cards = [card for card in deck if card.get('cluster_id', -1) == -1]
+    return len(noise_cards) / len(deck)
