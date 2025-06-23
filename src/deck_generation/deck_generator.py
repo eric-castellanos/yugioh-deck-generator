@@ -101,11 +101,13 @@ class DeckMetadata:
         self.extra_deck = extra_deck
         self.clustered_cards = clustered_cards
         
-        # Default values for metrics that might be accessed by other modules
+        # Cluster-related metrics (initialized with default values)
         self.cluster_entropy = 0.0
         self.intra_deck_cluster_distance = 0.0
         self.cluster_co_occurrence_rarity = 0.0
         self.noise_card_percentage = 0.0
+        self.cluster_distribution = {}
+        self.archetype_distribution = {}
         self.dominant_archetype = "Unknown"
         
         # Analyze the deck composition
@@ -123,7 +125,7 @@ class DeckMetadata:
         # Count extra deck types
         self.fusion_count = sum(1 for card in self.extra_deck if card.get('type') and 'Fusion' in card.get('type'))
         self.synchro_count = sum(1 for card in self.extra_deck if card.get('type') and 'Synchro' in card.get('type'))
-        self.xyz_count = sum(1 for card in self.extra_deck if card.get('type') and 'Xyz' in card.get('type'))
+        self.xyz_count = sum(1 for card in self.extra_deck if card.get('type') and 'XYZ' in card.get('type'))
         self.link_count = sum(1 for card in self.extra_deck if card.get('type') and 'Link' in card.get('type'))
         
         # Track copy distribution
@@ -140,10 +142,6 @@ class DeckMetadata:
         self.monster_ratio = self.monster_count / self.total_main if self.total_main > 0 else 0
         self.spell_ratio = self.spell_count / self.total_main if self.total_main > 0 else 0
         self.trap_ratio = self.trap_count / self.total_main if self.total_main > 0 else 0
-    
-        # Set dominant archetype from archetypes dict
-        if self.archetypes:
-            self.dominant_archetype = list(self.archetypes.keys())[0] if self.archetypes else "Unknown"
     
     def _calculate_copy_distribution(self):
         """Calculate the distribution of card copies in the deck."""
@@ -208,9 +206,45 @@ class DeckMetadata:
             "cards_as_3_ofs": self.copy_distribution['3_count'],
             "has_tuners": 1 if self.has_tuners else 0,
             "has_pendulums": 1 if self.has_pendulums else 0,
+            
+            # Add cluster-related metrics
+            "cluster_entropy": self.cluster_entropy,
+            "intra_deck_cluster_distance": self.intra_deck_cluster_distance,
+            "cluster_co_occurrence_rarity": self.cluster_co_occurrence_rarity,
+            "noise_card_percentage": self.noise_card_percentage,
         }
         
         return metrics
+    
+    def to_dict(self):
+        """Convert metadata to dictionary for serialization."""
+        return {
+            "main_deck_size": self.total_main,
+            "extra_deck_size": self.total_extra,
+            "monster_count": self.monster_count,
+            "spell_count": self.spell_count,
+            "trap_count": self.trap_count,
+            "monster_ratio": self.monster_ratio,
+            "spell_ratio": self.spell_ratio,
+            "trap_ratio": self.trap_ratio,
+            "fusion_count": self.fusion_count,
+            "synchro_count": self.synchro_count,
+            "xyz_count": self.xyz_count,
+            "link_count": self.link_count,
+            "copy_distribution": self.copy_distribution,
+            "archetypes": self.archetypes,
+            "has_tuners": self.has_tuners,
+            "has_pendulums": self.has_pendulums,
+            
+            # Add cluster-related metrics
+            "cluster_entropy": self.cluster_entropy,
+            "intra_deck_cluster_distance": self.intra_deck_cluster_distance,
+            "cluster_co_occurrence_rarity": self.cluster_co_occurrence_rarity,
+            "noise_card_percentage": self.noise_card_percentage,
+            "cluster_distribution": self.cluster_distribution,
+            "archetype_distribution": self.archetype_distribution,
+            "dominant_archetype": self.dominant_archetype,
+        }
 
 class DeckGenerator:
     """Yu-Gi-Oh! Deck Generator with game-based constraints."""
@@ -322,15 +356,31 @@ class DeckGenerator:
         main_deck = apply_max_copies_constraint(main_deck)
         
         # 2. Apply realistic monster copy distribution (most monsters as 2-3 copies) 
-        # Extract monsters from main deck
+        # Extract monsters, spells, and traps from main deck
         monsters = [card for card in main_deck if card.get('type') and 'Monster' in card.get('type')]
-        spells_traps = [card for card in main_deck if not (card.get('type') and 'Monster' in card.get('type'))]
+        spells = [card for card in main_deck if card.get('type') and 'Spell' in card.get('type')]
+        traps = [card for card in main_deck if card.get('type') and 'Trap' in card.get('type')]
         
-        # Only apply copy distribution if we have at least a few monsters
+        # Apply copy distribution to each card type
+        optimized_deck = []
+        
+        # Optimize monsters (higher chance of 3-ofs)
         if len(monsters) >= 3:
             optimized_monsters = apply_copy_distribution_to_monsters(monsters, deck_size=len(monsters))
-            # Recombine with spells and traps
-            main_deck = optimized_monsters + spells_traps
+            optimized_deck.extend(optimized_monsters)
+        else:
+            optimized_deck.extend(monsters)
+            
+        # Optimize spells and traps together (more variety in copy counts)
+        spells_traps = spells + traps
+        if len(spells_traps) >= 3:
+            optimized_spells_traps = apply_copy_distribution_to_spells_traps(spells_traps)
+            optimized_deck.extend(optimized_spells_traps)
+        else:
+            optimized_deck.extend(spells_traps)
+            
+        # Update main_deck with our optimized version
+        main_deck = optimized_deck
         
         # 3. Check and fix summoning mechanics requirements based on extra deck
         
@@ -346,14 +396,15 @@ class DeckGenerator:
         # Pendulum constraint
         pendulum_ok, main_deck = validate_pendulum_requirements(main_deck)
         
-        # 4. Apply deck size constraint (40-60 cards, mostly 40)
-        main_deck = apply_deck_size_constraint(main_deck, min_size=40, max_size=60, exact_size_probability=0.9)
-        
         # Verify 3-copy limit again after all the adjustments
         main_deck = apply_max_copies_constraint(main_deck)
         
         # Shuffle the main deck for randomness
         random.shuffle(main_deck)
+        # Trim the deck to exactly 40 cards if needed
+        if len(main_deck) > 40:
+            main_deck = main_deck[:40]
+        
         
         return main_deck, extra_deck
     
@@ -556,33 +607,39 @@ class DeckGenerator:
     
     def _randomize_ratios(self):
         """Randomize the deck ratios for each deck generation to ensure variety."""
-        # Apply a stronger random fluctuation for more variation between decks
-        fluctuation = random.uniform(-0.15, 0.15)  # Up to ±15% fluctuation
+        # Occasionally generate a deck with very low monster count (15-20 monsters)
+        low_monster_ratio = random.random() < 0.15  # 15% chance for low monster count deck
         
-        # Base ratios
-        base_monster = 0.6
-        base_spell = 0.2
-        base_trap = 0.2
+        if low_monster_ratio:
+            # Generate a deck with 15-20 monsters (37.5-50% of 40 card deck)
+            base_monster = random.uniform(0.375, 0.5)
+            logger.info("Generating low monster count deck variant")
+        else:
+            # Normal deck with more standard ratios
+            # Apply a stronger random fluctuation for more variation between decks
+            fluctuation = random.uniform(-0.15, 0.2)  # Wider range of fluctuation
+            base_monster = 0.6
+            base_monster = base_monster + fluctuation
         
-        # Apply fluctuation primarily to monster ratio, with wider bounds
-        # Min 40% monsters, max 80% monsters for greater variety
-        self.target_monster_ratio = max(0.4, min(0.8, base_monster + fluctuation))
+        # Apply wider bounds for monster ratio
+        # Min 37.5% monsters (15/40), max 80% monsters for greater variety
+        self.target_monster_ratio = max(0.375, min(0.8, base_monster))
         
         # Distribute remaining percentage between spells and traps
         # Apply additional variation to their distribution
         remaining = 1.0 - self.target_monster_ratio
-        spell_trap_variation = random.uniform(-0.2, 0.2)  # This shifts the balance between spells and traps
+        spell_trap_variation = random.uniform(-0.25, 0.25)  # Wider variation between spells and traps
         
         # Baseline weights
-        spell_weight = 0.5 + spell_trap_variation  # Can shift between 0.3 and 0.7 of remaining
-        spell_weight = max(0.3, min(0.7, spell_weight))  # Cap between 30% and 70% of remaining
+        spell_weight = 0.5 + spell_trap_variation  # Can shift between 0.25 and 0.75 of remaining
+        spell_weight = max(0.25, min(0.75, spell_weight))  # Cap between 25% and 75% of remaining
         trap_weight = 1.0 - spell_weight
         
         self.target_spell_ratio = remaining * spell_weight
         self.target_trap_ratio = remaining * trap_weight
         
-        # Keep the standard tolerance
-        self.ratio_tolerance = 0.25
+        # Wider tolerance for more variety
+        self.ratio_tolerance = 0.2
         
         logger.info(f"Deck ratios randomized to: {self.target_monster_ratio:.1%}M/{self.target_spell_ratio:.1%}S/{self.target_trap_ratio:.1%}T (±{self.ratio_tolerance:.0%} tolerance)")
     
@@ -962,13 +1019,8 @@ class DeckGenerator:
                 else:
                     break
         
-        # Determine initial target deck size
-        # For the initial generation, we'll always aim for 40 cards (min size)
-        # The deck size constraint will later determine if we want to expand beyond this
-        initial_target_size = 40
-        
-        # Fill the deck to reach our initial target size
-        while len(main_deck) < initial_target_size:
+        # Ensure exactly 40 cards and fill any remaining slots
+        while len(main_deck) < self.num_cards:
             # Determine which type we need more of based on current ratios
             ratios = self._check_ratios(main_deck)
             
@@ -999,8 +1051,8 @@ class DeckGenerator:
                 else:
                     break
         
-        # Trim to initial target size if needed
-        main_deck = main_deck[:initial_target_size]
+        # Trim to exactly 40 cards if needed
+        main_deck = main_deck[:self.num_cards]
         
         # Generate extra deck
         extra_deck = self._generate_extra_deck()
@@ -1018,7 +1070,7 @@ def apply_copy_distribution_to_monsters(cards: List[Dict], deck_size: int = 40) 
     """
     Apply a realistic distribution of card copies for monster cards.
     
-    Most monsters should be 2-3 copies (70-80%)
+    Most monsters should be 2-3 copies (60-70%)
     Some monsters should be tech cards at 1 copy (20-30%)
     No card should have more than 3 copies
     
@@ -1041,10 +1093,10 @@ def apply_copy_distribution_to_monsters(cards: List[Dict], deck_size: int = 40) 
     if unique_monsters == 0:
         return []
     
-    # Target distribution percentages - favoring 2-3 copies more strongly
-    pct_3copies = 0.4  # ~40% as 3-ofs
-    pct_2copies = 0.4  # ~40% as 2-ofs
-    pct_1copies = 0.2  # ~20% as 1-ofs
+    # Target distribution percentages with more 2-ofs and 3-ofs
+    pct_3copies = 0.45  # ~45% as 3-ofs
+    pct_2copies = 0.45  # ~45% as 2-ofs
+    pct_1copies = 0.10  # ~10% as 1-ofs
     
     # Calculate how many of each copy count we need
     target_3copies = int(unique_monsters * pct_3copies)
@@ -1058,72 +1110,45 @@ def apply_copy_distribution_to_monsters(cards: List[Dict], deck_size: int = 40) 
         target_2copies = 0
         target_1copies = 0
     elif unique_monsters <= 6:
-        # If 6 or fewer unique monsters, make most 3-ofs and some 2-ofs
-        target_3copies = int(unique_monsters * 0.7)
+        # If 6 or fewer unique monsters, make half 3-ofs and half 2-ofs
+        target_3copies = unique_monsters // 2
         target_2copies = unique_monsters - target_3copies
         target_1copies = 0
     
     # Assign copy counts to each unique monster
     monster_names = list(card_groups.keys())
+    random.shuffle(monster_names)  # Shuffle to randomize which cards get which copy count
     
-    # First, try to identify key monsters that should be 3-ofs
-    # This is a simple heuristic - cards that already have multiple copies
-    # in the initial deck are likely important and should be 3-ofs
-    copies_in_original = {name: len(cards) for name, cards in card_groups.items()}
-    
-    # Sort monster names by copies in original deck (descending)
-    sorted_by_copies = sorted(monster_names, key=lambda name: copies_in_original[name], reverse=True)
-    
-    # Prepare our copy assignments, starting with the highest-count cards as 3-ofs
     copy_assignments = {}
     
-    # First assign 3-ofs to cards that already have multiple copies
-    assigned_3ofs = 0
-    for name in sorted_by_copies:
-        if assigned_3ofs >= target_3copies:
-            break
-        if copies_in_original[name] > 1:
-            copy_assignments[name] = 3
-            assigned_3ofs += 1
+    # Assign 3-ofs
+    for i in range(target_3copies):
+        if i < len(monster_names):
+            copy_assignments[monster_names[i]] = 3
     
-    # Then randomly assign remaining cards
-    unassigned = [name for name in monster_names if name not in copy_assignments]
-    random.shuffle(unassigned)  # Randomize the order
+    # Assign 2-ofs
+    for i in range(target_3copies, target_3copies + target_2copies):
+        if i < len(monster_names):
+            copy_assignments[monster_names[i]] = 2
     
-    # Fill remaining 3-of slots
-    remaining_3ofs = target_3copies - assigned_3ofs
-    for i in range(remaining_3ofs):
-        if i < len(unassigned):
-            copy_assignments[unassigned[i]] = 3
-    
-    # Fill 2-of slots
-    start_idx = remaining_3ofs
-    for i in range(start_idx, start_idx + target_2copies):
-        if i < len(unassigned):
-            copy_assignments[unassigned[i]] = 2
-    
-    # Fill 1-of slots (any remaining unassigned cards)
-    start_idx = remaining_3ofs + target_2copies
-    for i in range(start_idx, len(unassigned)):
-        copy_assignments[unassigned[i]] = 1
+    # Assign 1-ofs
+    for i in range(target_3copies + target_2copies, unique_monsters):
+        if i < len(monster_names):
+            copy_assignments[monster_names[i]] = 1
     
     # Build the new monster list with correct copy counts
     result = []
-    for card_name, target_copies in copy_assignments.items():
+    for card_name, copy_count in copy_assignments.items():
         cards = card_groups[card_name]
-        if cards and len(cards) > 0:
-            # Get the first instance of this card (we'll duplicate this one if needed)
-            base_card = cards[0]
-            
-            # Add the correct number of copies by duplicating the card
-            for _ in range(target_copies):
-                # Create a deep copy of the card to avoid reference issues
-                card_copy = dict(base_card)
-                result.append(card_copy)
+        if cards:
+            # Add the assigned number of copies (or all if fewer exist)
+            copies_to_add = min(copy_count, len(cards))
+            result.extend(cards[:copies_to_add])
     
     # Log the distribution we achieved
     final_counts = Counter()
-    for card_name, copies in copy_assignments.items():
+    for card_name in copy_assignments.keys():
+        copies = sum(1 for card in result if card.get('name', '') == card_name)
         final_counts[copies] += 1
     
     total_monsters = sum(count * copies for copies, count in final_counts.items())
@@ -1132,6 +1157,82 @@ def apply_copy_distribution_to_monsters(cards: List[Dict], deck_size: int = 40) 
               f"{final_counts.get(2, 0)} cards as 2-ofs, " +
               f"{final_counts.get(1, 0)} cards as 1-ofs " +
               f"(total {total_monsters} monsters)")
+    
+    return result
+
+def apply_copy_distribution_to_spells_traps(cards: List[Dict]) -> List[Dict]:
+    """
+    Apply a realistic distribution of card copies for spell and trap cards.
+    
+    Key spells and traps should be 2-3 copies (60-70%)
+    Tech/situational cards should be 1 copy (30-40%)
+    No card should have more than 3 copies
+    
+    Args:
+        cards: List of spell/trap card dictionaries
+    
+    Returns:
+        Updated list of cards with realistic copy distribution
+    """
+    # Group cards by name for easier processing
+    card_groups = defaultdict(list)
+    for card in cards:
+        card_name = card.get('name', '')
+        if card_name:  # Skip cards with no name
+            card_groups[card_name].append(card)
+    
+    # Calculate target distribution
+    unique_cards = len(card_groups)
+    if unique_cards == 0:
+        return []
+    
+    # Target distribution percentages with emphasis on 3-ofs for key spells/traps
+    pct_3copies = 0.4  # ~40% as 3-ofs
+    pct_2copies = 0.3  # ~30% as 2-ofs
+    pct_1copies = 0.3  # ~30% as 1-ofs
+    
+    # Calculate how many of each copy count we need
+    target_3copies = int(unique_cards * pct_3copies)
+    target_2copies = int(unique_cards * pct_2copies)
+    target_1copies = unique_cards - target_3copies - target_2copies
+    
+    # Adjust if we have very few unique cards
+    if unique_cards <= 3:
+        # If 3 or fewer unique cards, make them all 3-ofs
+        target_3copies = unique_cards
+        target_2copies = 0
+        target_1copies = 0
+    elif unique_cards <= 6:
+        # If 6 or fewer unique cards, make half 3-ofs and half 2-ofs
+        target_3copies = unique_cards // 2
+        target_2copies = unique_cards - target_3copies
+        target_1copies = 0
+    
+    # Assign copy counts to each unique card
+    card_names = list(card_groups.keys())
+    random.shuffle(card_names)  # Shuffle to randomize which cards get which copy count
+    
+    copy_assignments = {}
+    
+    # Assign 3-ofs
+    for i in range(target_3copies):
+        if i < len(card_names):
+            copy_assignments[card_names[i]] = 3
+    
+    # Assign 2-ofs
+    for i in range(target_3copies, target_3copies + target_2copies):
+        if i < len(card_names):
+            copy_assignments[card_names[i]] = 2
+    
+    # Assign 1-ofs (all remaining cards)
+    for i in range(target_3copies + target_2copies, len(card_names)):
+        copy_assignments[card_names[i]] = 1
+    
+    # Build the result
+    result = []
+    for card_name, copy_count in copy_assignments.items():
+        original_cards = card_groups[card_name]
+        result.extend(original_cards[:copy_count])  # Add the required number of copies
     
     return result
 
@@ -1437,215 +1538,5 @@ def apply_max_copies_constraint(deck: List[Dict]) -> List[Dict]:
     logger.info(f"Removed {len(deck) - len(new_deck)} excess cards to enforce 3-copy limit")
     return new_deck
 
-def apply_deck_size_constraint(deck: List[Dict], min_size: int = 40, max_size: int = 60, exact_size_probability: float = 0.9) -> List[Dict]:
-    """
-    Ensure deck size is between min_size and max_size cards, with a high probability of being exactly min_size.
-    
-    In Yu-Gi-Oh!, competitive decks are usually exactly 40 cards (the minimum allowed),
-    with some specific strategies using more cards (up to 60).
-    
-    Args:
-        deck: List of card dictionaries
-        min_size: Minimum deck size (default: 40)
-        max_size: Maximum deck size (default: 60)
-        exact_size_probability: Probability of forcing deck to exactly min_size (default: 0.9)
-        
-    Returns:
-        Updated deck with appropriate size
-    """
-    current_size = len(deck)
-    
-    # Check if we should force exact size (usually 40 cards)
-    use_exact_size = random.random() < exact_size_probability
-    
-    if use_exact_size:
-        target_size = min_size
-        logger.info(f"Enforcing exact deck size of {min_size} cards (standard competitive size)")
-    else:
-        # Generate a random size between min_size and max_size, with distribution favoring smaller sizes
-        # We use a beta distribution skewed toward min_size
-        skew = random.betavariate(1.5, 4.0)  # Skewed toward smaller values
-        target_size = min_size + int(skew * (max_size - min_size))
-        logger.info(f"Selected deck size of {target_size} cards (between {min_size}-{max_size})")
-    
-    if current_size == target_size:
-        return deck  # Already at target size
-    
-    # Handle case where deck is too small
-    if current_size < target_size:
-        logger.info(f"Deck is undersized at {current_size} cards, adding {target_size - current_size} more cards")
-        
-        # Get DeckGenerator instance to access card clusters
-        deck_gen = DeckGenerator.get_instance()
-        
-        # Get all existing card names in the deck to avoid duplicates beyond 3 copies
-        existing_card_counts = Counter(card.get('name', '') for card in deck)
-        
-        # Get all available cards from clusters
-        all_cards = []
-        for cards in deck_gen.main_deck_clusters.values():
-            for card in cards:
-                card_name = card.get('name', '')
-                # Only consider cards with fewer than 3 copies
-                if existing_card_counts.get(card_name, 0) < 3:
-                    all_cards.append(card)
-        
-        if all_cards:
-            # Calculate target type counts to maintain the deck's balance
-            current_ratios = deck_gen._check_ratios(deck)
-            
-            # Prioritize cards by type to maintain approximate ratios
-            cards_to_add = []
-            cards_needed = target_size - current_size
-            
-            while len(cards_to_add) < cards_needed and all_cards:
-                # Recalculate current ratios with the cards we've added so far
-                temp_deck = deck + cards_to_add
-                current_ratios = deck_gen._check_ratios(temp_deck)
-                
-                # Determine which card type to prioritize
-                if current_ratios['monster_ratio'] < deck_gen.target_monster_ratio:
-                    card_type = 'Monster'
-                elif current_ratios['spell_ratio'] < deck_gen.target_spell_ratio:
-                    card_type = 'Spell'
-                elif current_ratios['trap_ratio'] < deck_gen.target_trap_ratio:
-                    card_type = 'Trap'
-                else:
-                    # If ratios are good, just pick randomly
-                    card_type = random.choice(['Monster', 'Spell', 'Trap'])
-                
-                # Filter cards of the desired type
-                type_cards = [card for card in all_cards 
-                             if card.get('type') and card_type in card.get('type') 
-                             and existing_card_counts.get(card.get('name', ''), 0) < 3]
-                
-                if type_cards:
-                    chosen_card = random.choice(type_cards)
-                    cards_to_add.append(chosen_card)
-                    # Remove the chosen card from all_cards to avoid picking it again
-                    all_cards = [c for c in all_cards if c != chosen_card]
-                    # Update the counter
-                    existing_card_counts[chosen_card.get('name', '')] += 1
-                else:
-                    # If we can't find cards of the desired type, just pick any card
-                    if all_cards:
-                        chosen_card = random.choice(all_cards)
-                        cards_to_add.append(chosen_card)
-                        all_cards = [c for c in all_cards if c != chosen_card]
-                        existing_card_counts[chosen_card.get('name', '')] += 1
-                    else:
-                        break
-            
-            # Add the selected cards to the deck
-            deck.extend(cards_to_add)
-            logger.info(f"Added {len(cards_to_add)} cards to reach target size of {target_size}")
-        
-    # Handle case where deck is too large
-    elif current_size > target_size:
-        cards_to_remove = current_size - target_size
-        logger.info(f"Deck is oversized at {current_size} cards, removing {cards_to_remove} cards")
-        
-        # Separate cards by type to maintain ratios
-        monsters = [card for card in deck if card.get('type') and 'Monster' in card.get('type')]
-        spells = [card for card in deck if card.get('type') and 'Spell' in card.get('type')]
-        traps = [card for card in deck if card.get('type') and 'Trap' in card.get('type')]
-        
-        # Calculate target counts for each type, maintaining approximate ratios
-        total = len(monsters) + len(spells) + len(traps)
-        target_monsters = int(target_size * len(monsters) / total)
-        target_spells = int(target_size * len(spells) / total)
-        target_traps = target_size - target_monsters - target_spells
-        
-        # Smart trimming for monsters - preserve copy distribution
-        if len(monsters) > target_monsters:
-            logger.info(f"Trimming monsters from {len(monsters)} to {target_monsters}")
-            
-            # Group monster cards by name
-            monster_groups = {}
-            for card in monsters:
-                name = card.get('name', '')
-                if name not in monster_groups:
-                    monster_groups[name] = []
-                monster_groups[name].append(card)
-            
-            # Group by copy count
-            three_ofs = [name for name, cards in monster_groups.items() if len(cards) == 3]
-            two_ofs = [name for name, cards in monster_groups.items() if len(cards) == 2]
-            one_ofs = [name for name, cards in monster_groups.items() if len(cards) == 1]
-            
-            # Target distribution for monsters (60% 3-ofs, 30% 2-ofs, 10% 1-ofs)
-            target_3of_cards = int(target_monsters * 0.6)  # Space for 3-ofs
-            target_2of_cards = int(target_monsters * 0.3)  # Space for 2-ofs
-            target_1of_cards = target_monsters - target_3of_cards - target_2of_cards  # Space for 1-ofs
-            
-            # Select monsters according to target distribution
-            selected_monsters = []
-            
-            # Start with 3-ofs (prioritize)
-            random.shuffle(three_ofs)
-            for name in three_ofs:
-                if target_3of_cards <= 0:
-                    break
-                    
-                cards = monster_groups[name]
-                copies_to_take = min(len(cards), target_3of_cards)
-                selected_monsters.extend(cards[:copies_to_take])
-                target_3of_cards -= copies_to_take
-            
-            # Add 2-ofs
-            random.shuffle(two_ofs)
-            for name in two_ofs:
-                if target_2of_cards <= 0:
-                    break
-                    
-                cards = monster_groups[name]
-                copies_to_take = min(len(cards), target_2of_cards)
-                selected_monsters.extend(cards[:copies_to_take])
-                target_2of_cards -= copies_to_take
-            
-            # Add 1-ofs
-            random.shuffle(one_ofs)
-            for name in one_ofs:
-                if target_1of_cards <= 0:
-                    break
-                    
-                cards = monster_groups[name]
-                copies_to_take = min(len(cards), target_1of_cards)
-                selected_monsters.extend(cards[:copies_to_take])
-                target_1of_cards -= copies_to_take
-            
-            # If we need more cards to meet target, add any remaining
-            remaining_slots = target_monsters - len(selected_monsters)
-            if remaining_slots > 0:
-                # Collect unused cards
-                unused = []
-                for name, cards in monster_groups.items():
-                    if name not in [card.get('name', '') for card in selected_monsters]:
-                        unused.extend(cards)
-                    else:
-                        # Check for unused copies of cards we've already included
-                        used_copies = sum(1 for c in selected_monsters if c.get('name', '') == name)
-                        if used_copies < len(cards):
-                            # Add any unused copies
-                            unused.extend(cards[used_copies:])
-                
-                random.shuffle(unused)
-                selected_monsters.extend(unused[:remaining_slots])
-            
-            # Update monsters list
-            monsters = selected_monsters
-        
-        # Simple trimming for spells and traps (less strategic importance for copy count)
-        if len(spells) > target_spells:
-            random.shuffle(spells)
-            spells = spells[:target_spells]
-            
-        if len(traps) > target_traps:
-            random.shuffle(traps)
-            traps = traps[:target_traps]
-        
-        # Recombine the deck
-        deck = monsters + spells + traps
-        logger.info(f"Trimmed deck to {len(deck)} cards with {len(monsters)} monsters, {len(spells)} spells, {len(traps)} traps")
-    
-    return deck
+# Define SimpleDeckGenerator as an alias for DeckGenerator for backwards compatibility
+SimpleDeckGenerator = DeckGenerator
