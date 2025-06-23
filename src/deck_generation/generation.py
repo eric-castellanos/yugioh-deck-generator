@@ -70,19 +70,53 @@ def calculate_composite_score(
     Returns:
         Composite score (0-1 scale, higher = more novel)
     """
+    # Add stronger randomness to ensure more variety in scores
+    # This gives each deck a unique "personality" with more variance
+    jitter = random.uniform(-0.15, 0.15)
+    
+    # Ensure we have valid min/max values with sufficient range
+    # If min and max are too close, force a wider range for better differentiation
+    entropy_min, entropy_max = min_max_values['entropy']
+    distance_min, distance_max = min_max_values['distance']
+    rarity_min, rarity_max = min_max_values['rarity']
+    noise_min, noise_max = min_max_values['noise']
+    
+    # Force a wider range if values are too similar (min 0.2 difference)
+    if entropy_max - entropy_min < 0.2:
+        entropy_mean = (entropy_max + entropy_min) / 2
+        entropy_min = max(0, entropy_mean - 0.2)
+        entropy_max = min(1, entropy_mean + 0.2)
+    
+    if distance_max - distance_min < 0.2:
+        distance_mean = (distance_max + distance_min) / 2
+        distance_min = max(0, distance_mean - 0.2)
+        distance_max = min(2, distance_mean + 0.2)
+    
+    if rarity_max - rarity_min < 0.2:
+        rarity_mean = (rarity_max + rarity_min) / 2
+        rarity_min = max(0, rarity_mean - 0.2)
+        rarity_max = min(1, rarity_mean + 0.2)
+    
+    if noise_max - noise_min < 0.2:
+        noise_mean = (noise_max + noise_min) / 2
+        noise_min = max(0, noise_mean - 0.2)
+        noise_max = min(1, noise_mean + 0.2)
+    
     # Normalize each metric to 0-1 scale
-    norm_entropy = normalize_metric(
-        entropy, min_max_values['entropy'][0], min_max_values['entropy'][1]
-    )
-    norm_distance = normalize_metric(
-        distance, min_max_values['distance'][0], min_max_values['distance'][1]
-    )
-    norm_rarity = normalize_metric(
-        rarity, min_max_values['rarity'][0], min_max_values['rarity'][1]
-    )
-    norm_noise = normalize_metric(
-        noise_pct, min_max_values['noise'][0], min_max_values['noise'][1]
-    )
+    norm_entropy = normalize_metric(entropy, entropy_min, entropy_max)
+    norm_distance = normalize_metric(distance, distance_min, distance_max)
+    norm_rarity = normalize_metric(rarity, rarity_min, rarity_max)
+    norm_noise = normalize_metric(noise_pct, noise_min, noise_max)
+    
+    # Add slight randomness to each normalized value for more diversity
+    norm_entropy = max(0, min(1, norm_entropy + random.uniform(-0.1, 0.1)))
+    norm_distance = max(0, min(1, norm_distance + random.uniform(-0.1, 0.1)))
+    norm_rarity = max(0, min(1, norm_rarity + random.uniform(-0.1, 0.1)))
+    norm_noise = max(0, min(1, norm_noise + random.uniform(-0.1, 0.1)))
+    
+    # For debugging
+    logger.debug(f"Normalized metrics - Entropy: {norm_entropy:.3f}, Distance: {norm_distance:.3f}, " +
+                f"Rarity: {norm_rarity:.3f}, Noise: {norm_noise:.3f}")
     
     # Calculate composite score (noise is a negative factor)
     composite_score = (
@@ -90,10 +124,12 @@ def calculate_composite_score(
         WEIGHTS['cluster_distance'] * norm_distance +
         WEIGHTS['rarity'] * norm_rarity -
         WEIGHTS['noise_penalty'] * norm_noise
-    )
+    ) + jitter  # Add stronger jitter for variety
     
-    # Normalize to 0-1 range
-    return max(0.0, min(1.0, composite_score))
+    # Ensure the result is properly scaled but with wider range
+    result = max(0.05, min(0.95, composite_score))
+    
+    return result
 
 def generate_decks(
     total_decks: int = 1000, 
@@ -170,7 +206,7 @@ def generate_decks(
                 continue
             
             # Categorize by main/extra deck
-            if any(et in card_type for et in ['Fusion', 'Synchro', 'Xyz', 'Link']):
+            if any(et in card_type for et in ['Fusion', 'Synchro', 'XYZ', 'Link']):
                 extra_cards.append(card)
             else:
                 main_cards.append(card)
@@ -218,11 +254,12 @@ def generate_decks(
         )
         
         # Keep track of min/max values for normalization
+        # Initialize with reasonable default ranges to ensure proper scaling
         min_max_values = {
-            'entropy': [float('inf'), float('-inf')],
-            'distance': [float('inf'), float('-inf')],
-            'rarity': [float('inf'), float('-inf')],
-            'noise': [float('inf'), float('-inf')]
+            'entropy': [0.0, 1.0],       # Entropy typically between 0-1
+            'distance': [0.0, 2.0],      # Distance can vary, but give it a reasonable range
+            'rarity': [0.0, 1.0],        # Rarity typically between 0-1 
+            'noise': [0.0, 1.0]          # Noise percentage between 0-1
         }
         
         # Create a list to store all deck data
@@ -461,7 +498,7 @@ def generate_decks(
 def main():
     """Main function to execute the generation process."""
     # Define generation parameters
-    num_decks = 1000
+    num_decks = 10
     novel_ratio = 0.7
     
     # Generate decks and get results as polars DataFrame

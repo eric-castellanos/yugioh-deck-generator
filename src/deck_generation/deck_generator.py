@@ -38,7 +38,7 @@ class CardType(Enum):
     TRAP = "Trap"
     FUSION = "Fusion"
     SYNCHRO = "Synchro"
-    XYZ = "Xyz"
+    XYZ = "XYZ"
     LINK = "Link"
     RITUAL = "Ritual Monster"
     PENDULUM = "Pendulum"  # Added Pendulum type
@@ -313,7 +313,7 @@ class DeckGenerator:
                     continue
                 
                 # Categorize by main/extra deck
-                if any(et in card_type for et in ['Fusion', 'Synchro', 'Xyz', 'Link']):
+                if any(et in card_type for et in ['Fusion', 'Synchro', 'XYZ', 'Link']):
                     extra_cards.append(card)
                 else:
                     main_cards.append(card)
@@ -387,7 +387,7 @@ class DeckGenerator:
         # Synchro constraint
         synchro_ok, main_deck = validate_synchro_requirements(main_deck, extra_deck)
         
-        # Xyz constraint 
+        # XYZ constraint 
         xyz_ok, main_deck = validate_xyz_requirements(main_deck, extra_deck)  
         
         # Link constraint
@@ -512,7 +512,7 @@ class DeckGenerator:
         extra_deck = extra_deck[:target_size]
         
         # Ensure we have a good distribution of summon types in the extra deck
-        # Aim for some variety among Fusion, Synchro, Xyz, and Link
+        # Aim for some variety among Fusion, Synchro, XYZ, and Link
         type_counts = Counter()
         for card in extra_deck:
             card_type = card.get('type', '')
@@ -520,15 +520,15 @@ class DeckGenerator:
                 type_counts['Fusion'] += 1
             elif 'Synchro' in card_type:
                 type_counts['Synchro'] += 1
-            elif 'Xyz' in card_type:
-                type_counts['Xyz'] += 1
+            elif 'XYZ' in card_type:
+                type_counts['XYZ'] += 1
             elif 'Link' in card_type:
                 type_counts['Link'] += 1
         
         logger.info(f"Generated Extra Deck with {len(extra_deck)} cards: "
                   f"{type_counts.get('Fusion', 0)} Fusion, "
                   f"{type_counts.get('Synchro', 0)} Synchro, "
-                  f"{type_counts.get('Xyz', 0)} Xyz, "
+                  f"{type_counts.get('XYZ', 0)} XYZ, "
                   f"{type_counts.get('Link', 0)} Link")
         
         return extra_deck
@@ -1068,11 +1068,13 @@ class DeckGenerator:
 
 def apply_copy_distribution_to_monsters(cards: List[Dict], deck_size: int = 40) -> List[Dict]:
     """
-    Apply a realistic distribution of card copies for monster cards.
+    Apply a realistic distribution of card copies for monster cards using a refined greedy strategy.
     
-    Most monsters should be 2-3 copies (60-70%)
-    Some monsters should be tech cards at 1 copy (20-30%)
-    No card should have more than 3 copies
+    Strategy:
+    1. Get target number of monsters based on deck size and monster ratio
+    2. Shuffle list of unique monsters
+    3. Repeatedly pick monsters and assign 1-3 copies using weighted random choices
+    4. Stop when reaching target monster count
     
     Args:
         cards: List of monster card dictionaries (already filtered to just monsters)
@@ -1088,71 +1090,109 @@ def apply_copy_distribution_to_monsters(cards: List[Dict], deck_size: int = 40) 
         if card_name:  # Skip cards with no name
             card_groups[card_name].append(card)
     
-    # Calculate target distribution
-    unique_monsters = len(card_groups)
-    if unique_monsters == 0:
+    # Calculate target number of monsters (use current count as target)
+    num_monsters = len(cards)
+    if num_monsters == 0:
         return []
     
-    # Target distribution percentages with more 2-ofs and 3-ofs
-    pct_3copies = 0.45  # ~45% as 3-ofs
-    pct_2copies = 0.45  # ~45% as 2-ofs
-    pct_1copies = 0.10  # ~10% as 1-ofs
-    
-    # Calculate how many of each copy count we need
-    target_3copies = int(unique_monsters * pct_3copies)
-    target_2copies = int(unique_monsters * pct_2copies)
-    target_1copies = unique_monsters - target_3copies - target_2copies
-    
-    # Adjust if we have very few unique monsters
-    if unique_monsters <= 3:
-        # If 3 or fewer unique monsters, make them all 3-ofs
-        target_3copies = unique_monsters
-        target_2copies = 0
-        target_1copies = 0
-    elif unique_monsters <= 6:
-        # If 6 or fewer unique monsters, make half 3-ofs and half 2-ofs
-        target_3copies = unique_monsters // 2
-        target_2copies = unique_monsters - target_3copies
-        target_1copies = 0
-    
-    # Assign copy counts to each unique monster
+    # Get unique monsters and shuffle them
     monster_names = list(card_groups.keys())
-    random.shuffle(monster_names)  # Shuffle to randomize which cards get which copy count
+    random.shuffle(monster_names)
     
-    copy_assignments = {}
-    
-    # Assign 3-ofs
-    for i in range(target_3copies):
-        if i < len(monster_names):
-            copy_assignments[monster_names[i]] = 3
-    
-    # Assign 2-ofs
-    for i in range(target_3copies, target_3copies + target_2copies):
-        if i < len(monster_names):
-            copy_assignments[monster_names[i]] = 2
-    
-    # Assign 1-ofs
-    for i in range(target_3copies + target_2copies, unique_monsters):
-        if i < len(monster_names):
-            copy_assignments[monster_names[i]] = 1
-    
-    # Build the new monster list with correct copy counts
+    # Initialize result and tracking variables
     result = []
+    copy_assignments = {}
+    total_added = 0
+    
+    # Weights for random selection (higher weight for 3-copies and 2-copies)
+    # These weights make 3-copies more common, followed by 2-copies, with 1-copies being least common
+    copy_weights = {
+        3: 50,  # Higher weight for 3-copies
+        2: 40,  # Medium weight for 2-copies
+        1: 10   # Lower weight for 1-copies
+    }
+    
+    # Process each monster name in shuffled order
+    while total_added < num_monsters and monster_names:
+        # If we're almost at our target, adjust weights to prefer smaller copy counts
+        remaining = num_monsters - total_added
+        if remaining <= 3:
+            # Prioritize exact fit for last few slots
+            possible_copies = [c for c in [1, 2, 3] if c <= remaining]
+            if not possible_copies:
+                break
+            copy_count = max(possible_copies)
+        else:
+            # Weighted random choice of copy count (1, 2, or 3)
+            possible_copies = [1, 2, 3]
+            # Adjust weights to favor higher copy counts more strongly
+            weights = [copy_weights[c] for c in possible_copies]
+            copy_count = random.choices(possible_copies, weights=weights, k=1)[0]
+        
+        # Get next monster name from shuffled list
+        if not monster_names:
+            break
+        card_name = monster_names.pop(0)
+        
+        # Assign copy count, with a bias toward 3-copies for key monsters
+        # 60% chance to maximize copies if remaining >= 3
+        if remaining >= 3 and random.random() < 0.6:
+            actual_copies = 3
+        else:
+            actual_copies = min(copy_count, remaining)
+            
+        copy_assignments[card_name] = actual_copies
+        total_added += actual_copies
+        
+        # If we reached our target, stop adding
+        if total_added >= num_monsters:
+            break
+    
+    # Build the new monster list with assigned copy counts
     for card_name, copy_count in copy_assignments.items():
-        cards = card_groups[card_name]
-        if cards:
-            # Add the assigned number of copies (or all if fewer exist)
-            copies_to_add = min(copy_count, len(cards))
-            result.extend(cards[:copies_to_add])
+        card_variants = card_groups[card_name]
+        
+        if len(card_variants) >= copy_count:
+            # Use different dicts if you have enough
+            result.extend(card_variants[:copy_count])
+        else:
+            # Repeat the single available dict if needed
+            result.extend(card_variants * copy_count)
+
+    # If we still have room for more monsters and can add more 2-ofs or 3-ofs
+    # by repeating what we have, do it to create a more consistent deck
+    if total_added < num_monsters and result:
+        # Find monsters already in the deck with 1-2 copies to potentially add more
+        name_counts = Counter(card.get('name', '') for card in result)
+        candidates = [name for name, count in name_counts.items() if 1 <= count <= 2]
+        
+        while total_added < num_monsters and candidates:
+            # Pick a random candidate to increase copies
+            card_name = random.choice(candidates)
+            current_copies = name_counts[card_name]
+            
+            # Don't exceed 3 copies
+            if current_copies < 3:
+                # Add one more copy
+                if card_name in card_groups and card_groups[card_name]:
+                    result.append(card_groups[card_name][0])
+                    total_added += 1
+                    name_counts[card_name] += 1
+                    
+                    # If we reached 3 copies, remove from candidates
+                    if name_counts[card_name] >= 3:
+                        candidates.remove(card_name)
+            else:
+                candidates.remove(card_name)
     
     # Log the distribution we achieved
     final_counts = Counter()
-    for card_name in copy_assignments.keys():
+    for card_name in set(card.get('name', '') for card in result):
         copies = sum(1 for card in result if card.get('name', '') == card_name)
         final_counts[copies] += 1
     
     total_monsters = sum(count * copies for copies, count in final_counts.items())
-    logger.info(f"Monster copy distribution: " +
+    logger.info(f"Monster copy distribution (improved greedy strategy): " +
               f"{final_counts.get(3, 0)} cards as 3-ofs, " +
               f"{final_counts.get(2, 0)} cards as 2-ofs, " +
               f"{final_counts.get(1, 0)} cards as 1-ofs " +
@@ -1164,8 +1204,8 @@ def apply_copy_distribution_to_spells_traps(cards: List[Dict]) -> List[Dict]:
     """
     Apply a realistic distribution of card copies for spell and trap cards.
     
-    Key spells and traps should be 2-3 copies (60-70%)
-    Tech/situational cards should be 1 copy (30-40%)
+    Key spells and traps should be 2-3 copies (30-40%)
+    Tech/situational cards should be 1 copy (60-70%)
     No card should have more than 3 copies
     
     Args:
@@ -1186,14 +1226,17 @@ def apply_copy_distribution_to_spells_traps(cards: List[Dict]) -> List[Dict]:
     if unique_cards == 0:
         return []
     
-    # Target distribution percentages with emphasis on 3-ofs for key spells/traps
-    pct_3copies = 0.4  # ~40% as 3-ofs
-    pct_2copies = 0.3  # ~30% as 2-ofs
-    pct_1copies = 0.3  # ~30% as 1-ofs
+    # Get the number of cards we're dealing with
+    num_cards = len(cards)
+    
+    # Target distribution percentages - more 2-ofs and 3-ofs for consistency
+    pct_3copies = 0.25  # 25% as 3-ofs
+    pct_2copies = 0.25  # 25% as 2-ofs
+    pct_1copies = 0.50  # 50% as 1-ofs
     
     # Calculate how many of each copy count we need
-    target_3copies = int(unique_cards * pct_3copies)
-    target_2copies = int(unique_cards * pct_2copies)
+    target_3copies = max(1, int(unique_cards * pct_3copies))
+    target_2copies = max(1, int(unique_cards * pct_2copies))
     target_1copies = unique_cards - target_3copies - target_2copies
     
     # Adjust if we have very few unique cards
@@ -1232,7 +1275,23 @@ def apply_copy_distribution_to_spells_traps(cards: List[Dict]) -> List[Dict]:
     result = []
     for card_name, copy_count in copy_assignments.items():
         original_cards = card_groups[card_name]
-        result.extend(original_cards[:copy_count])  # Add the required number of copies
+        if len(original_cards) >= copy_count:
+            result.extend(original_cards[:copy_count])
+        else:
+            result.extend(original_cards * copy_count)  # Add multiple copies if needed
+    
+    # Log the distribution we achieved
+    final_counts = Counter()
+    for card_name in set(card.get('name', '') for card in result):
+        copies = sum(1 for card in result if card.get('name', '') == card_name)
+        final_counts[copies] += 1
+    
+    total_st = sum(count * copies for copies, count in final_counts.items())
+    logger.info(f"Spell/Trap copy distribution: " +
+              f"{final_counts.get(3, 0)} cards as 3-ofs, " +
+              f"{final_counts.get(2, 0)} cards as 2-ofs, " +
+              f"{final_counts.get(1, 0)} cards as 1-ofs " +
+              f"(total {total_st} S/T cards)")
     
     return result
 
@@ -1314,11 +1373,11 @@ def validate_synchro_requirements(main_deck: List[Dict], extra_deck: List[Dict])
 
 def validate_xyz_requirements(main_deck: List[Dict], extra_deck: List[Dict]) -> Tuple[bool, List[Dict]]:
     """
-    Validate and fix Xyz summoning requirements.
+    Validate and fix XYZ summoning requirements.
     
-    If Extra Deck has Xyz monsters:
+    If Extra Deck has XYZ monsters:
     1. Ensure Main Deck has at least 2 monsters of the same level
-    2. Try to ensure those levels match the ranks of Xyz monsters
+    2. Try to ensure those levels match the ranks of XYZ monsters
     
     Args:
         main_deck: The main deck cards
@@ -1327,10 +1386,10 @@ def validate_xyz_requirements(main_deck: List[Dict], extra_deck: List[Dict]) -> 
     Returns:
         Tuple of (requirements_met, updated_main_deck)
     """
-    # Check if we have any Xyz monsters in the Extra Deck
-    xyz_monsters = [card for card in extra_deck if card.get('type') and 'Xyz' in card.get('type')]
+    # Check if we have any XYZ monsters in the Extra Deck
+    xyz_monsters = [card for card in extra_deck if card.get('type') and 'XYZ' in card.get('type')]
     if not xyz_monsters:
-        return True, main_deck  # No Xyz monsters, no need to validate
+        return True, main_deck  # No XYZ monsters, no need to validate
     
     # Get all monsters in the main deck
     monsters = [card for card in main_deck if card.get('type') and 'Monster' in card.get('type')]
@@ -1342,26 +1401,26 @@ def validate_xyz_requirements(main_deck: List[Dict], extra_deck: List[Dict]) -> 
     has_same_level = any(count >= 2 for level, count in level_counts.items() if level > 0)
     
     if has_same_level:
-        logger.info("Xyz requirement met: Main Deck has monsters of the same level")
+        logger.info("XYZ requirement met: Main Deck has monsters of the same level")
         
-        # Check if levels match ranks of Xyz monsters (bonus requirement)
+        # Check if levels match ranks of XYZ monsters (bonus requirement)
         xyz_ranks = set(get_monster_level(card) for card in xyz_monsters)
         matching_levels = any(level in xyz_ranks for level, count in level_counts.items() if count >= 2)
         
         if matching_levels:
-            logger.info("Xyz rank requirements met: Main Deck contains matching levels for Xyz Summons")
+            logger.info("XYZ rank requirements met: Main Deck contains matching levels for XYZ Summons")
         else:
-            logger.info("Xyz ranks not matched exactly, but this is a soft requirement")
+            logger.info("XYZ ranks not matched exactly, but this is a soft requirement")
             
         return True, main_deck
     else:
         # We don't have enough monsters of the same level - fix by adding some
-        logger.info("Missing monsters of the same level for Xyz Summons - adding compatible monsters")
+        logger.info("Missing monsters of the same level for XYZ Summons - adding compatible monsters")
         
         # Get DeckGenerator instance to access card clusters
         deck_gen = DeckGenerator.get_instance()
         
-        # Get common Xyz ranks (typically 3, 4, 7, 8)
+        # Get common XYZ ranks (typically 3, 4, 7, 8)
         xyz_ranks = [get_monster_level(card) for card in xyz_monsters]
         most_common_rank = Counter(xyz_ranks).most_common(1)[0][0] if xyz_ranks else 4  # Default to 4 if can't determine
         
@@ -1376,10 +1435,10 @@ def validate_xyz_requirements(main_deck: List[Dict], extra_deck: List[Dict]) -> 
             # Choose at least 2 monsters with the desired level
             monsters_to_add = random.sample(matching_monsters, min(2, len(matching_monsters)))
             main_deck.extend(monsters_to_add)
-            logger.info(f"Added {len(monsters_to_add)} Level {most_common_rank} monsters to support Xyz Summons")
+            logger.info(f"Added {len(monsters_to_add)} Level {most_common_rank} monsters to support XYZ Summons")
             return True, main_deck
         else:
-            logger.warning(f"No Level {most_common_rank} monsters found in card database - cannot fix Xyz requirements")
+            logger.warning(f"No Level {most_common_rank} monsters found in card database - cannot fix XYZ requirements")
             return False, main_deck
 def validate_link_requirements(main_deck: List[Dict], extra_deck: List[Dict]) -> Tuple[bool, List[Dict]]:
     """
