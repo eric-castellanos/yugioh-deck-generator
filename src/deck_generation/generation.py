@@ -18,10 +18,10 @@ import logging
 from pathlib import Path
 from tqdm import tqdm
 import mlflow
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 from src.deck_generation.deck_generator import (
-    SimpleDeckGenerator, 
+    DeckGenerator, 
     DeckMetadata,
     get_card_data_with_clusters
 )
@@ -98,7 +98,8 @@ def calculate_composite_score(
 def generate_decks(
     total_decks: int = 1000, 
     novel_ratio: float = 0.7,
-    meta_archetypes: Optional[List[str]] = None
+    meta_archetypes: Optional[List[str]] = None,
+    log_individual_decks: bool = False  # New parameter to control individual deck logging
 ) -> pl.DataFrame:
     """
     Generate a specified number of decks, with a mix of novel and meta-aware decks.
@@ -107,322 +108,227 @@ def generate_decks(
         total_decks: Total number of decks to generate
         novel_ratio: Ratio of novel decks (vs meta-aware)
         meta_archetypes: List of archetypes to use for meta-aware generation
+        log_individual_decks: Whether to log each deck to MLflow individually
         
     Returns:
-        Polars DataFrame with all deck data and metrics
+        DataFrame with deck generation metrics
     """
-    logger.info(f"Loading clustered cards from MLflow model registry...")
+    # Load card clustering model and data
+    logger.info("Loading clustered cards from MLflow model registry...")
+    clustered_cards = get_card_data_with_clusters()
+    logger.info(f"✅ Successfully loaded {len(clustered_cards)} card clusters")
     
-    # Load clustered card data
-    try:
-        clustered_cards = get_card_data_with_clusters()
-        logger.info(f"✅ Successfully loaded {len(clustered_cards)} card clusters")
-    except Exception as e:
-        logger.error(f"❌ Failed to load clusters: {e}")
-        raise
+    # Initialize MLflow experiment for bulk deck generation
+    setup_deck_generation_experiment(experiment_name="yugioh_deck_generation_bulk")
     
-    # Set up the MLflow experiment
-    experiment_id = setup_deck_generation_experiment("yugioh_deck_generation_bulk")
+    # Initialize deck generator with clustering model
+    generator = DeckGenerator(clustering_model=None, card_data=clustered_cards)
     
-    # Initialize deck generator
-    generator = SimpleDeckGenerator(clustered_cards)
-    
-    # Calculate number of decks per type
-    num_novel = int(total_decks * novel_ratio)
-    num_meta = total_decks - num_novel
-    
-    # If no archetypes provided, identify common archetypes from the clusters
-    if not meta_archetypes:
-        # Find archetypes with sufficient cards
-        archetype_counts = defaultdict(int)
+    # Select meta archetypes if not provided 
+    if meta_archetypes is None:
+        all_archetypes = []
         for cluster_cards in clustered_cards.values():
             for card in cluster_cards:
-                if 'archetypes' in card and card['archetypes']:
-                    for arch in card['archetypes']:
-                        archetype_counts[arch] += 1
+                if 'archetype' in card and card['archetype']:
+                    all_archetypes.append(card['archetype'])
         
-        # Get top 10 archetypes with at least 20 cards
-        meta_archetypes = [arch for arch, count in 
-                          sorted(archetype_counts.items(), key=lambda x: x[1], reverse=True)
-                          if count >= 20][:10]
+        # Count most common archetypes
+        archetype_counts = Counter(all_archetypes)
+        meta_archetypes = ["Unknown"] + [arch for arch, _ in archetype_counts.most_common(9)]
     
     logger.info(f"Using meta archetypes: {', '.join(meta_archetypes)}")
     
-    # Start MLflow run for the bulk generation
-    with mlflow.start_run(experiment_id=experiment_id) as run:
-        # Log generation parameters
-        log_deck_generation_tags(
-            generation_mode="bulk",
-            stage="analysis",
-            version="v1.0",
-            batch_generation=True,
-            num_decks=total_decks
-        )
-        
-        log_deck_generation_params(
-            generation_mode="bulk",
-            deck_count=total_decks,
-            novel_ratio=novel_ratio,
-            meta_archetypes=meta_archetypes
-        )
-        
-        # Keep track of min/max values for normalization
-        min_max_values = {
-            'entropy': [float('inf'), float('-inf')],
-            'distance': [float('inf'), float('-inf')],
-            'rarity': [float('inf'), float('-inf')],
-            'noise': [float('inf'), float('-inf')]
-        }
-        
-        # Create a list to store all deck data
-        all_decks_data = []
-        successful_decks = 0
-        
-        # Progress bar for better visibility
-        logger.info(f"Generating {total_decks} decks ({num_novel} novel, {num_meta} meta-aware)...")
-        start_time = time.time()
-        
-        # First pass to generate all decks and calculate min/max values for normalization
-        pbar = tqdm(total=total_decks, desc="Generating decks")
-        
+    # Calculate number of novel vs meta-aware decks
+    num_novel = int(total_decks * novel_ratio)
+    num_meta = total_decks - num_novel
+    
+    # Create empty lists to store deck data
+    all_decks = []
+    
+    logger.info(f"Generating {total_decks} decks ({num_novel} novel, {num_meta} meta-aware)...")
+    
+    # Generate decks with progress bar
+    with tqdm(total=total_decks, desc="Generating decks") as pbar:
         # Generate novel decks
         for i in range(num_novel):
             try:
-                deck_id = f"novel_{i+1}"
-                
-                # Generate a novel deck
                 main_deck, extra_deck, metadata = generator.generate_deck(
-                    mode="novel", 
-                    use_mlflow=False  # Don't log individual runs
+                    mode="novel",
+                    use_mlflow=log_individual_decks
                 )
                 
-                # Extract metrics
-                entropy = metadata.cluster_entropy
-                distance = metadata.intra_deck_cluster_distance
-                rarity = metadata.cluster_co_occurrence_rarity
-                noise_pct = metadata.noise_card_percentage
+                # Get metrics
+                metrics = metadata.get_metrics() 
                 
-                # Update min/max values
-                min_max_values['entropy'][0] = min(min_max_values['entropy'][0], entropy)
-                min_max_values['entropy'][1] = max(min_max_values['entropy'][1], entropy)
-                min_max_values['distance'][0] = min(min_max_values['distance'][0], distance)
-                min_max_values['distance'][1] = max(min_max_values['distance'][1], distance)
-                min_max_values['rarity'][0] = min(min_max_values['rarity'][0], rarity)
-                min_max_values['rarity'][1] = max(min_max_values['rarity'][1], rarity)
-                min_max_values['noise'][0] = min(min_max_values['noise'][0], noise_pct)
-                min_max_values['noise'][1] = max(min_max_values['noise'][1], noise_pct)
-                
-                # Store deck data
-                all_decks_data.append({
-                    'deck_id': deck_id,
-                    'generation_mode': 'novel',
+                # Add to our collection
+                deck_info = {
+                    'deck_id': f"novel_{i+1}",
+                    'generation_type': 'novel',
                     'main_deck_size': len(main_deck),
                     'extra_deck_size': len(extra_deck),
-                    'monster_count': metadata.monster_count,
-                    'spell_count': metadata.spell_count,
-                    'trap_count': metadata.trap_count,
-                    'monster_ratio': metadata.monster_count / len(main_deck) if main_deck else 0,
-                    'spell_ratio': metadata.spell_count / len(main_deck) if main_deck else 0,
-                    'trap_ratio': metadata.trap_count / len(main_deck) if main_deck else 0,
-                    'dominant_archetype': metadata.dominant_archetype,
-                    'cluster_entropy': entropy,
-                    'intra_deck_cluster_distance': distance,
-                    'cluster_co_occurrence_rarity': rarity,
-                    'noise_card_percentage': noise_pct,
+                    'monster_count': metrics['monster_count'],
+                    'spell_count': metrics['spell_count'],
+                    'trap_count': metrics['trap_count'],
+                    'monster_ratio': metrics['monster_ratio'],
+                    'spell_ratio': metrics['spell_ratio'],
+                    'trap_ratio': metrics['trap_ratio']
+                }
+                
+                # Calculate entropy as a measure of card copy distribution
+                copy_counts = defaultdict(int)
+                for card in main_deck:
+                    name = card.get('name', '')
+                    if name:
+                        copy_counts[name] += 1
+                
+                # Entropy calculation
+                counts = list(copy_counts.values())
+                if counts:
+                    total_cards = sum(counts)
+                    probabilities = [count / total_cards for count in counts]
+                    entropy = -sum(p * math.log(p) for p in probabilities if p > 0)
+                    normalized_entropy = entropy / math.log(len(counts)) if len(counts) > 1 else 0
+                else:
+                    entropy = 0
+                    normalized_entropy = 0
+                
+                # Additional metrics
+                deck_info.update({
+                    'unique_cards': len(copy_counts),
                     'raw_entropy': entropy,
-                    'raw_distance': distance,
-                    'raw_rarity': rarity,
-                    'raw_noise': noise_pct,
-                    'main_deck': main_deck,  # Store the full list of main deck cards
-                    'extra_deck': extra_deck,  # Store the full list of extra deck cards
-                    # Composite score will be calculated in second pass
+                    'normalized_entropy': normalized_entropy,
+                    'fusion_count': metrics['fusion_count'],
+                    'synchro_count': metrics['synchro_count'],
+                    'xyz_count': metrics['xyz_count'],
+                    'link_count': metrics['link_count'],
+                    'cards_as_1_ofs': metrics.get('cards_as_1_ofs', 0),
+                    'cards_as_2_ofs': metrics.get('cards_as_2_ofs', 0),
+                    'cards_as_3_ofs': metrics.get('cards_as_3_ofs', 0),
+                    'has_tuners': metrics.get('has_tuners', 0),
+                    'has_pendulums': metrics.get('has_pendulums', 0),
                 })
                 
-                successful_decks += 1
-                pbar.update(1)
-                
-                # Log progress periodically
-                if i % 50 == 0 and i > 0:
-                    elapsed = time.time() - start_time
-                    rate = i / elapsed if elapsed > 0 else 0
-                    logger.info(f"Generated {i}/{total_decks} decks ({rate:.1f} decks/sec)")
+                all_decks.append(deck_info)
                 
             except Exception as e:
                 logger.warning(f"Failed to generate novel deck {i+1}: {e}")
+            finally:
                 pbar.update(1)
         
-        # Generate meta-aware decks
+        # Generate meta-aware decks 
         for i in range(num_meta):
+            # Randomly select an archetype
+            archetype = random.choice(meta_archetypes)
+            
             try:
-                deck_id = f"meta_{i+1}"
-                
-                # Choose a random archetype from the list
-                target_archetype = random.choice(meta_archetypes)
-                
-                # Generate a meta-aware deck
                 main_deck, extra_deck, metadata = generator.generate_deck(
-                    mode="meta_aware", 
-                    target_archetype=target_archetype,
-                    use_mlflow=False  # Don't log individual runs
+                    mode="meta_aware",
+                    target_archetype=archetype,
+                    use_mlflow=log_individual_decks
                 )
                 
-                # Extract metrics
-                entropy = metadata.cluster_entropy
-                distance = metadata.intra_deck_cluster_distance
-                rarity = metadata.cluster_co_occurrence_rarity
-                noise_pct = metadata.noise_card_percentage
+                # Get metrics
+                metrics = metadata.get_metrics()
                 
-                # Update min/max values
-                min_max_values['entropy'][0] = min(min_max_values['entropy'][0], entropy)
-                min_max_values['entropy'][1] = max(min_max_values['entropy'][1], entropy)
-                min_max_values['distance'][0] = min(min_max_values['distance'][0], distance)
-                min_max_values['distance'][1] = max(min_max_values['distance'][1], distance)
-                min_max_values['rarity'][0] = min(min_max_values['rarity'][0], rarity)
-                min_max_values['rarity'][1] = max(min_max_values['rarity'][1], rarity)
-                min_max_values['noise'][0] = min(min_max_values['noise'][0], noise_pct)
-                min_max_values['noise'][1] = max(min_max_values['noise'][1], noise_pct)
-                
-                # Store deck data
-                all_decks_data.append({
-                    'deck_id': deck_id,
-                    'generation_mode': 'meta_aware',
-                    'target_archetype': target_archetype,
+                # Add to our collection
+                deck_info = {
+                    'deck_id': f"meta_{i+1}",
+                    'generation_type': 'meta_aware',
+                    'target_archetype': archetype,
                     'main_deck_size': len(main_deck),
                     'extra_deck_size': len(extra_deck),
-                    'monster_count': metadata.monster_count,
-                    'spell_count': metadata.spell_count,
-                    'trap_count': metadata.trap_count,
-                    'monster_ratio': metadata.monster_count / len(main_deck) if main_deck else 0,
-                    'spell_ratio': metadata.spell_count / len(main_deck) if main_deck else 0,
-                    'trap_ratio': metadata.trap_count / len(main_deck) if main_deck else 0,
-                    'dominant_archetype': metadata.dominant_archetype,
-                    'cluster_entropy': entropy,
-                    'intra_deck_cluster_distance': distance,
-                    'cluster_co_occurrence_rarity': rarity,
-                    'noise_card_percentage': noise_pct,
+                    'monster_count': metrics['monster_count'],
+                    'spell_count': metrics['spell_count'],
+                    'trap_count': metrics['trap_count'],
+                    'monster_ratio': metrics['monster_ratio'],
+                    'spell_ratio': metrics['spell_ratio'],
+                    'trap_ratio': metrics['trap_ratio']
+                }
+                
+                # Calculate entropy as a measure of card copy distribution
+                copy_counts = defaultdict(int)
+                for card in main_deck:
+                    name = card.get('name', '')
+                    if name:
+                        copy_counts[name] += 1
+                
+                # Entropy calculation
+                counts = list(copy_counts.values())
+                if counts:
+                    total_cards = sum(counts)
+                    probabilities = [count / total_cards for count in counts]
+                    try:
+                        entropy = -sum(p * math.log(p) for p in probabilities if p > 0)
+                        normalized_entropy = entropy / math.log(len(counts)) if len(counts) > 1 else 0
+                    except (ZeroDivisionError, ValueError):
+                        entropy = 0
+                        normalized_entropy = 0
+                else:
+                    entropy = 0
+                    normalized_entropy = 0
+                
+                # Additional metrics
+                deck_info.update({
+                    'unique_cards': len(copy_counts),
                     'raw_entropy': entropy,
-                    'raw_distance': distance,
-                    'raw_rarity': rarity,
-                    'raw_noise': noise_pct,
-                    'main_deck': main_deck,  # Store the full list of main deck cards
-                    'extra_deck': extra_deck,  # Store the full list of extra deck cards
-                    # Composite score will be calculated in second pass
+                    'normalized_entropy': normalized_entropy,
+                    'fusion_count': metrics['fusion_count'],
+                    'synchro_count': metrics['synchro_count'],
+                    'xyz_count': metrics['xyz_count'],
+                    'link_count': metrics['link_count'],
+                    'cards_as_1_ofs': metrics.get('cards_as_1_ofs', 0),
+                    'cards_as_2_ofs': metrics.get('cards_as_2_ofs', 0),
+                    'cards_as_3_ofs': metrics.get('cards_as_3_ofs', 0),
+                    'has_tuners': metrics.get('has_tuners', 0),
+                    'has_pendulums': metrics.get('has_pendulums', 0),
                 })
                 
-                successful_decks += 1
-                pbar.update(1)
+                all_decks.append(deck_info)
                 
             except Exception as e:
-                logger.warning(f"Failed to generate meta-aware deck for {target_archetype}: {e}")
+                logger.warning(f"Failed to generate meta-aware deck for {archetype}: {e}")
+            finally:
                 pbar.update(1)
-        
-        pbar.close()
-        
-        # Create polars DataFrame
-        df = pl.DataFrame(all_decks_data)
-        
-        # Calculate composite scores using min/max values
-        # We need to do this in a second pass now that we know the min/max values
+    
+    # Create a dataframe with all deck data
+    df = pl.DataFrame(all_decks) if all_decks else pl.DataFrame()
+    
+    if df.height == 0:
+        logger.warning("No decks were successfully generated!")
+        return df
+    
+    # Add calculated columns for balance metrics
+    
+    # Fix entropy calculation issues
+    if "raw_entropy" not in df.columns:
+        df = df.with_columns([
+            pl.lit(0.5).alias("raw_entropy"),
+            pl.lit(0.5).alias("normalized_entropy")
+        ])
+    
+    # Ensure all required columns exist with defaults
+    required_metrics = [
+        "monster_ratio", "spell_ratio", "trap_ratio", 
+        "raw_entropy", "normalized_entropy"
+    ]
+    
+    for col in required_metrics:
+        if col not in df.columns:
+            df = df.with_columns(pl.lit(0.5).alias(col))
+    
+    try:
+        # Calculate composite scores
         logger.info("Calculating composite scores...")
         
+        # Simple composite score using weighted average of metrics
         df = df.with_columns([
-            pl.struct([
-                pl.col("raw_entropy"),
-                pl.col("raw_distance"),
-                pl.col("raw_rarity"),
-                pl.col("raw_noise"),
-            ]).map_elements(lambda row: calculate_composite_score(
-                row["raw_entropy"],
-                row["raw_distance"],
-                row["raw_rarity"],
-                row["raw_noise"],
-                min_max_values
-            )).alias("composite_score")
+            (pl.col("normalized_entropy") * 0.5 + 
+             ((pl.col("monster_ratio") + pl.col("spell_ratio") + pl.col("trap_ratio")) / 3) * 0.5)
+            .alias("composite_score")
         ])
         
-        # Log summary metrics
-        mlflow.log_metric("generated_decks", successful_decks)
-        mlflow.log_metric("success_rate", successful_decks / total_decks)
-        mlflow.log_metric("avg_composite_score", df["composite_score"].mean())
-        mlflow.log_metric("max_composite_score", df["composite_score"].max())
-        mlflow.log_metric("min_composite_score", df["composite_score"].min())
-        
-        # Group by generation mode and calculate statistics
-        mode_stats = df.group_by("generation_mode").agg([
-            pl.count("deck_id").alias("count"),
-            pl.mean("composite_score").alias("avg_score"),
-            pl.mean("cluster_entropy").alias("avg_entropy"),
-            pl.mean("intra_deck_cluster_distance").alias("avg_distance"),
-            pl.mean("cluster_co_occurrence_rarity").alias("avg_rarity"),
-            pl.mean("noise_card_percentage").alias("avg_noise")
-        ])
-        
-        # Log the data
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
-            # Convert to pandas and save CSV
-            pd_df = df.to_pandas()
-            pd_df.to_csv(tmp_file.name, index=False)
-            mlflow.log_artifact(tmp_file.name, "all_decks_data.csv")
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as tmp_file:
-            pd_df.to_html(tmp_file, index=False)
-            mlflow.log_artifact(tmp_file.name, "all_decks_data.html")
-        
-        # Log summary statistics
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
-            # Convert to pandas and save CSV
-            pd_mode_stats = mode_stats.to_pandas()
-            pd_mode_stats.to_csv(tmp_file.name, index=False)
-            mlflow.log_artifact(tmp_file.name, "generation_mode_stats.csv")
-        
-        # Log information about the run
-        logger.info(f"✅ Generated {successful_decks} of {total_decks} decks successfully")
-        logger.info(f"✅ Generation complete. Run ID: {run.info.run_id}")
-        logger.info(f"✅ MLflow UI: http://localhost:5000/#/experiments/{experiment_id}")
-        
-        # Return the Polars DataFrame
-        return df
-
-def main():
-    """Main function to execute the generation process."""
-    # Define generation parameters
-    num_decks = 1000
-    novel_ratio = 0.7
+    except Exception as e:
+        logger.error(f"Error calculating composite scores: {e}")
+        df = df.with_columns([pl.lit(0.5).alias("composite_score")])
     
-    # Generate decks and get results as polars DataFrame
-    logger.info(f"Starting generation of {num_decks} decks...")
-    df_pl = generate_decks(num_decks, novel_ratio)
-    
-    # Convert to pandas at the end (for compatibility with other tools)
-    df_pd = df_pl.to_pandas()
-    
-    logger.info(f"Generation complete! Shape of final DataFrame: {df_pd.shape}")
-    
-    # Display summary statistics
-    top_novel = df_pd[df_pd['generation_mode'] == 'novel'].nlargest(5, 'composite_score')
-    top_meta = df_pd[df_pd['generation_mode'] == 'meta_aware'].nlargest(5, 'composite_score')
-    
-    logger.info("\n=== Top 5 Novel Decks by Composite Score ===")
-    for i, (_, row) in enumerate(top_novel.iterrows()):
-        logger.info(f"{i+1}. Deck {row['deck_id']} - Score: {row['composite_score']:.4f} - "
-                   f"Archetype: {row['dominant_archetype']}")
-    
-    logger.info("\n=== Top 5 Meta-Aware Decks by Composite Score ===")
-    for i, (_, row) in enumerate(top_meta.iterrows()):
-        logger.info(f"{i+1}. Deck {row['deck_id']} - Score: {row['composite_score']:.4f} - "
-                   f"Archetype: {row['dominant_archetype']}")
-    
-    # Save the full dataframe locally
-    output_dir = Path("outputs/deck_analysis")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    output_file = output_dir / f"deck_generation_{timestamp}.csv"
-    df_pd.to_csv(output_file, index=False)
-    
-    logger.info(f"Full dataset saved to: {output_file}")
-    
-    return df_pd
-
-if __name__ == "__main__":
-    main()
+    return df

@@ -77,7 +77,7 @@ def upload_eda_report_to_s3(local_path: str, bucket: str, prefix: str):
 if __name__ == "__main__":
 
     # Example raw S3 file path
-    raw_s3_path = "s3://yugioh-data/deck_scoring/training_data/training_random_generated_decks_composite.csv"
+    raw_s3_path = "s3://yugioh-data/deck_scoring/training_data/random_generated_decks_composite_data.csv"
     df = read_raw(raw_s3_path)
 
     # Generate and upload report
