@@ -471,8 +471,9 @@ def generate_decks(
         
         # Log the data
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
-            # Convert to pandas and save CSV
+            # Convert to pandas, convert NumPy arrays to lists, and save CSV
             pd_df = df.to_pandas()
+            pd_df = convert_numpy_to_list_in_df(pd_df)
             pd_df.to_csv(tmp_file.name, index=False)
             mlflow.log_artifact(tmp_file.name, "all_decks_data.csv")
         
@@ -482,8 +483,9 @@ def generate_decks(
         
         # Log summary statistics
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
-            # Convert to pandas and save CSV
+            # Convert to pandas, convert NumPy arrays to lists, and save CSV
             pd_mode_stats = mode_stats.to_pandas()
+            pd_mode_stats = convert_numpy_to_list_in_df(pd_mode_stats)
             pd_mode_stats.to_csv(tmp_file.name, index=False)
             mlflow.log_artifact(tmp_file.name, "generation_mode_stats.csv")
         
@@ -495,11 +497,56 @@ def generate_decks(
         # Return the Polars DataFrame
         return df
 
+def convert_numpy_to_list_in_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert all NumPy arrays in a pandas DataFrame to Python lists
+    to ensure proper serialization to CSV.
+    
+    Args:
+        df: Input pandas DataFrame
+        
+    Returns:
+        DataFrame with all NumPy arrays converted to lists
+    """
+    # Create a copy to avoid modifying the original DataFrame
+    result_df = df.copy()
+    
+    for col in result_df.columns:
+        # Check if the column contains objects that might be arrays
+        if result_df[col].dtype == 'object':
+            # Apply conversion to each cell in the column
+            result_df[col] = result_df[col].apply(
+                lambda x: x.tolist() if isinstance(x, np.ndarray) else x
+            )
+            
+            # Handle nested dictionaries with arrays
+            if result_df[col].apply(lambda x: isinstance(x, dict)).any():
+                result_df[col] = result_df[col].apply(
+                    lambda d: {
+                        k: v.tolist() if isinstance(v, np.ndarray) else v
+                        for k, v in d.items()
+                    } if isinstance(d, dict) else d
+                )
+                
+            # Handle nested lists of dictionaries with arrays
+            if result_df[col].apply(lambda x: isinstance(x, list)).any():
+                result_df[col] = result_df[col].apply(
+                    lambda lst: [
+                        {
+                            k: v.tolist() if isinstance(v, np.ndarray) else v
+                            for k, v in item.items()
+                        } if isinstance(item, dict) else item
+                        for item in lst
+                    ] if isinstance(lst, list) else lst
+                )
+    
+    return result_df
+
 def main():
     """Main function to execute the generation process."""
     # Define generation parameters
-    num_decks = 10
-    novel_ratio = 0.7
+    num_decks = 5000
+    novel_ratio = 0.65
     
     # Generate decks and get results as polars DataFrame
     logger.info(f"Starting generation of {num_decks} decks with game-based constraints...")
@@ -516,6 +563,9 @@ def main():
     
     # Convert to pandas at the end (for compatibility with other tools)
     df_pd = df_pl.to_pandas()
+    
+    # Convert any NumPy arrays to Python lists for proper serialization
+    df_pd = convert_numpy_to_list_in_df(df_pd)
     
     # Save the output to a CSV file for further analysis
     output_dir = Path("outputs/deck_analysis")
