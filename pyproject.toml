@@ -37,6 +37,9 @@ hdbscan = "^0.8.33"
 scikit-learn = "^1.3.0"
 umap-learn = "^0.5.4"
 
+[tool.poetry.group.deck_scoring.dependencies]
+xgboost = "^2.1.4"
+
 # Data processing and analysis
 numpy = "^1.23.5"
 pandas = "^1.5.3"

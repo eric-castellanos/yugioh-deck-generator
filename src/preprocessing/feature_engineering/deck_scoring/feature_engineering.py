@@ -307,6 +307,9 @@ def extract_strategy_flags(main_deck: list[dict]) -> dict:
 if __name__ == "__main__":
     deck_df = load_deck_data_from_s3()
 
+    import pdb
+    pdb.set_trace()
+
     # Summoning Mechanic Features
     deck_df['has_tuner'] = deck_df['main_deck'].apply(has_tuner)
     deck_df['num_tuners'] = deck_df['main_deck'].apply(num_tuners)
@@ -360,6 +363,10 @@ if __name__ == "__main__":
 
     for col in feature_cols:
         logger.info(f"\nSummary for {col}:\n{deck_df[[col]].describe(include='all')}")
+
+    deck_df = deck_df.drop(columns=['cluster_entropy', 'intra_deck_cluster_distance', 'cluster_co_occurrence_rarity',
+                                    'noise_card_percentage', 'raw_entropy', 'raw_distance', 'raw_rarity',
+                                    'raw_noise'], axis=1)
 
     # Write Polars DataFrame to in-memory Parquet buffer
     buffer = io.BytesIO()
