@@ -449,7 +449,7 @@ if __name__ == "__main__":
 
         # Define key and upload
         month_str = datetime.today().strftime('%Y-%m')
-        s3_key = f"processed/feature_engineered/{month_str}/feature_engineered.parquet"
+        s3_key = f"processed/feature_engineered/clustering/{month_str}/feature_engineered.parquet"
 
         upload_to_s3(
             bucket="yugioh-data",

@@ -2,6 +2,8 @@ import logging
 from typing import List, Tuple, Optional, Dict, Any, Union
 from collections import Counter, defaultdict
 import re
+from datetime import datetime
+import io
 
 import pandas as pd
 import numpy as np
@@ -10,9 +12,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 import nltk
+from sentence_transformers import SentenceTransformer
 
 # Import utils
-from src.utils.s3_utils import read_csv_from_s3
+from src.utils.s3_utils import read_csv_from_s3, upload_to_s3
 
 # Set up logging
 logging.basicConfig(
@@ -26,6 +29,17 @@ nltk.download('punkt_tab')
 #nltk.download('stopwords')
 
 STOPWORDS = set(stopwords.words("english"))
+
+STRATEGY_KEYWORDS = {
+    'mentions_banish': r'\bbanish\b',
+    'mentions_graveyard': r'\bgraveyard\b',
+    'mentions_draw': r'\bdraw\b',
+    'mentions_search': r'\bsearch\b',
+    'mentions_special_summon': r'\bspecial summon\b',
+    'mentions_negate': r'\bnegate\b',
+    'mentions_destroy': r'\bdestroy\b',
+    'mentions_shuffle': r'\bshuffle\b'
+}
 
 def convert_list_columns(df: pd.DataFrame, list_columns: List[str]) -> pd.DataFrame:
     logger.info(f"Converting list columns: {list_columns}")
@@ -239,6 +253,57 @@ def add_bow_features_nltk(deck_df: pd.DataFrame, top_k_words: int = 100, binary:
     bow_df = pd.DataFrame(bow_features, index=deck_df.index)
     return pd.concat([deck_df, bow_df], axis=1)
 
+def load_embedding_model(model_name: str = "all-MiniLM-L6-v2") -> SentenceTransformer:
+    """
+    Load the SentenceTransformer model.
+    """
+    logger.info(f"Loading SentenceTransformer model: {model_name}")
+    return SentenceTransformer(model_name)
+
+
+def compute_mean_embedding(descs: List[str], model: SentenceTransformer) -> List[float]:
+    """
+    Compute the mean embedding for a list of descriptions using the given model.
+    """
+    if not descs:
+        return np.zeros(model.get_sentence_embedding_dimension()).tolist()
+    
+    embeddings = model.encode(descs, show_progress_bar=False)
+    return np.mean(embeddings, axis=0).tolist()
+
+
+def add_mean_embedding_features_to_decks(deck_df: pd.DataFrame, model_name: str = "all-MiniLM-L6-v2") -> pd.DataFrame:
+    """
+    Add a new column `main_deck_mean_embedding` with mean description embeddings for each deck.
+    """
+    model = load_embedding_model(model_name)
+    deck_df = deck_df.copy()
+
+    def process_deck(deck_cards: List[Dict[str, Any]]) -> List[float]:
+        descriptions = get_card_descriptions(deck_cards)
+        return compute_mean_embedding(descriptions, model)
+
+    logger.info(f"Generating mean embeddings for {len(deck_df)} decks")
+    deck_df["main_deck_mean_embedding"] = deck_df["main_deck"].apply(process_deck)
+    logger.info("Mean embedding features added successfully")
+
+    return deck_df
+
+def extract_strategy_flags(main_deck: list[dict]) -> dict:
+    """
+    Returns boolean flags for presence of strategy keywords in card descriptions.
+    """
+    text = " ".join(
+        card.get("desc", "").lower()
+        for card in main_deck
+        if isinstance(card.get("desc", ""), str)
+    )
+
+    return {
+        feature: bool(re.search(pattern, text))
+        for feature, pattern in STRATEGY_KEYWORDS.items()
+    }
+
 if __name__ == "__main__":
     deck_df = load_deck_data_from_s3()
 
@@ -260,8 +325,13 @@ if __name__ == "__main__":
     deck_df['num_unique_monsters'] = deck_df['main_deck'].apply(num_unique_monsters)
 
     # NLP features
-    deck_df_with_features = add_tfidf_features_to_decks(deck_df)
+    deck_df = add_tfidf_features_to_decks(deck_df)
     deck_df = add_bow_features_nltk(deck_df, top_k_words=150, binary=True)
+    deck_df = add_mean_embedding_features_to_decks(deck_df, model_name="all-MiniLM-L6-v2")
+
+    # Strategy Flag Features
+    strategy_flags_df = pd.DataFrame(deck_df['main_deck'].apply(extract_strategy_flags).tolist(), index=deck_df.index)
+    deck_df = pd.concat([deck_df, strategy_flags_df], axis=1)
 
     feature_cols = [
     'has_tuner',
@@ -276,8 +346,33 @@ if __name__ == "__main__":
     'max_copies_per_card',
     'avg_copies_per_monster',
     'num_unique_monsters',
-    'main_deck_mean_tfidf'
+    'main_deck_mean_tfidf',
+    'main_deck_mean_embedding',
+    'mentions_banish',
+    'mentions_graveyard',
+    'mentions_draw',
+    'mentions_search',
+    'mentions_special_summon',
+    'mentions_negate',
+    'mentions_destroy',
+    'mentions_shuffle'
     ]
 
     for col in feature_cols:
-        logger.info(f"\nSummary for {col}:\n{deck_df_with_features[[col]].describe(include='all')}")
+        logger.info(f"\nSummary for {col}:\n{deck_df[[col]].describe(include='all')}")
+
+    # Write Polars DataFrame to in-memory Parquet buffer
+    buffer = io.BytesIO()
+    deck_df.to_parquet(buffer)
+    buffer.seek(0)
+    
+    # Define key and upload
+    month_str = datetime.today().strftime('%Y-%m')
+    s3_key = f"processed/feature_engineered/deck_scoring/{month_str}/feature_engineered.parquet"
+
+    upload_to_s3(
+        bucket="yugioh-data",
+        key=s3_key,
+        data=buffer.getvalue(),
+        content_type="application/octet-stream"
+    )
