@@ -25,7 +25,7 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 client = MlflowClient(MLFLOW_TRACKING_URI)
 
 
-def setup_clustering_experiment(experiment_name: str = "yugioh_card_clustering") -> str:
+def setup_experiment(experiment_name: str) -> str:
     """
     Set up or get the clustering experiment.
     
@@ -107,39 +107,26 @@ def log_clustering_params(
         preprocessing_params: Preprocessing parameters (PCA, UMAP, etc.)
         **kwargs: Additional parameters to log
     """
-    # Helper function to convert numpy types to Python types
-    def convert_value(value):
-        if isinstance(value, (np.integer, np.int64, np.int32, np.int16, np.int8)):
-            return int(value)
-        elif isinstance(value, (np.floating, np.float64, np.float32)):
-            return float(value)
-        elif isinstance(value, np.bool_):
-            return bool(value)
-        elif hasattr(value, 'item'):  # other numpy scalars
-            return value.item()
-        elif isinstance(value, (list, tuple)):
-            return [convert_value(v) for v in value]
-        elif isinstance(value, dict):
-            return {str(k): convert_value(v) for k, v in value.items()}
-        else:
-            return value
+    # Combine all parameters into a single dictionary
+    all_params = {
+        "s3_bucket": s3_bucket,
+        "s3_key": s3_key
+    }
     
-    # Log data source params
-    mlflow.log_param("s3_bucket", s3_bucket)
-    mlflow.log_param("s3_key", s3_key)
-    
-    # Log algorithm parameters
+    # Add algorithm parameters
     for key, value in algorithm_params.items():
-        mlflow.log_param(key, convert_value(value))
+        all_params[key] = value
     
-    # Log preprocessing parameters
+    # Add preprocessing parameters
     if preprocessing_params:
         for key, value in preprocessing_params.items():
-            mlflow.log_param(key, convert_value(value))
+            all_params[key] = value
     
-    # Log any additional parameters
-    for key, value in kwargs.items():
-        mlflow.log_param(key, convert_value(value))
+    # Add additional parameters
+    all_params.update(kwargs)
+    
+    # Use the general-purpose log_params function
+    log_params(all_params)
 
 
 def log_essential_clustering_metrics(
@@ -159,12 +146,16 @@ def log_essential_clustering_metrics(
         num_features: Number of features
         noise_percentage: Percentage of noise points
     """
-    # Convert numpy types to Python native types
-    mlflow.log_metric("total_clusters", int(total_clusters))
-    mlflow.log_metric("silhouette_score", float(silhouette_score))
-    mlflow.log_metric("num_samples", int(num_samples))
-    mlflow.log_metric("num_features", int(num_features))
-    mlflow.log_metric("noise_percentage", float(noise_percentage))
+    metrics = {
+        "total_clusters": total_clusters,
+        "silhouette_score": silhouette_score,
+        "num_samples": num_samples,
+        "num_features": num_features,
+        "noise_percentage": noise_percentage
+    }
+    
+    # Use the general-purpose log_metrics function
+    log_metrics(metrics)
 
 
 def log_dataset_info(dataset_info: Dict[str, Any]) -> None:
@@ -336,44 +327,8 @@ def get_best_clustering_run(experiment_name: str = "/yugioh_card_clustering") ->
         return None
 
 
-# Legacy functions for backwards compatibility
-def run_score(run):
-    """Legacy function - use get_best_clustering_run instead."""
-    silhouette = run.data.metrics.get("silhouette_score", -1)
-    adjusted_rand = run.data.metrics.get("adjusted_rand_index", 0)
-    
-    noise = run.data.metrics.get("enhanced_noise_percentage", run.data.metrics.get("noise_percentage", 0))
-    cluster_std = run.data.metrics.get("enhanced_cluster_size_std", 0)
-    entropy = run.data.metrics.get("enhanced_archetype_entropy_mean", 0)
-    n_clusters = run.data.metrics.get("enhanced_num_clusters", run.data.metrics.get("n_clusters_found", 0))
-
-    is_kmeans = noise == 0 and cluster_std < 10
-    
-    score = 0.7 * silhouette
-
-    if 5 <= noise <= 15:
-        score += 0.2
-    elif 15 < noise <= 25:
-        score += 0.05
-    elif noise > 25:
-        score -= 0.1 * (noise - 25) / 100
-
-    if is_kmeans:
-        score -= 0.1
-
-    score += min(0.1, cluster_std / 100)
-
-    if entropy > 0:
-        score += max(0, 0.1 * (3.0 - entropy))
-
-    return score
-
-
-# Initialize experiment on import
-try:
-    setup_clustering_experiment()
-except Exception as e:
-    logger.warning(f"Could not initialize experiment on import: {e}")
+# This legacy run_score function has been removed as it's deprecated
+# Please use the scoring logic in get_best_clustering_run instead
 
 
 def log_dataset_with_schema(
@@ -802,25 +757,6 @@ def determine_if_final_model(run_data: Dict[str, Any]) -> bool:
     return is_final
 
 
-def convert_to_native_types(obj):
-    """Convert numpy types to native Python types for MLflow compatibility."""
-    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
-        return int(obj)
-    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
-        return float(obj)
-    elif isinstance(obj, np.bool_):
-        return bool(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        # Convert both keys and values, ensuring keys are strings
-        return {str(convert_to_native_types(k)): convert_to_native_types(v) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [convert_to_native_types(item) for item in obj]
-    else:
-        return obj
-
-
 def safe_json_serialize(obj):
     """
     Safely serialize objects to JSON, converting numpy types to native Python types.
@@ -833,7 +769,7 @@ def safe_json_serialize(obj):
     """
     if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
         return int(obj)
-    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
         return float(obj)
     elif isinstance(obj, np.bool_):
         return bool(obj)
@@ -914,32 +850,6 @@ def force_register_model_from_run(
 # DECK GENERATION MLFLOW UTILITIES
 # =====================================
 
-def setup_deck_generation_experiment(experiment_name: str = "yugioh_deck_generation") -> str:
-    """
-    Set up or get the deck generation experiment.
-    
-    Args:
-        experiment_name: Name of the MLflow experiment
-        
-    Returns:
-        Experiment ID
-    """
-    try:
-        experiment = mlflow.get_experiment_by_name(experiment_name)
-        if experiment is None:
-            experiment_id = mlflow.create_experiment(experiment_name)
-            logger.info(f"Created new experiment: {experiment_name}")
-        else:
-            experiment_id = experiment.experiment_id
-            logger.info(f"Using existing experiment: {experiment_name}")
-        
-        mlflow.set_experiment(experiment_name)
-        return experiment_id
-    except Exception as e:
-        logger.error(f"Error setting up experiment: {e}")
-        raise
-
-
 def log_deck_generation_tags(
     generation_mode: str,
     target_archetype: Optional[str] = None,
@@ -991,17 +901,20 @@ def log_deck_generation_params(
         clustering_run_id: Run ID of the clustering model used
         **kwargs: Additional parameters to log
     """
-    mlflow.log_param("generation_mode", generation_mode)
+    # Combine parameters into a single dictionary
+    params = {"generation_mode": generation_mode}
     
     if target_archetype:
-        mlflow.log_param("target_archetype", target_archetype)
+        params["target_archetype"] = target_archetype
     
     if clustering_run_id:
-        mlflow.log_param("clustering_run_id", clustering_run_id)
+        params["clustering_run_id"] = clustering_run_id
+        
+    # Add any additional parameters
+    params.update(kwargs)
     
-    # Log any additional parameters
-    for key, value in kwargs.items():
-        mlflow.log_param(key, str(value))
+    # Use the general-purpose log_params function
+    log_params(params)
 
 
 def log_deck_metrics(
@@ -1161,140 +1074,12 @@ from src.utils.mlflow.get_clustering_model_from_registry import (
     get_card_data_with_clusters
 )
 
-# For backwards compatibility
-def get_clustered_cards_from_model(model_name: str = "yugioh_clustering_final_model",
-                                 stage: Optional[str] = None):
-    """
-    Load the clustering model object from MLflow model registry and applies it to card data.
-    This function is deprecated, use get_card_data_with_clusters from get_clustering_model_from_registry instead.
-    
-    Args:
-        model_name: Name of the registered model
-        stage: Model stage (None, "Staging", "Production", etc.)
-        
-    Returns:
-        Dictionary mapping cluster IDs to lists of card dictionaries
-    """
-    logger.warning("get_clustered_cards_from_model is deprecated, use get_card_data_with_clusters instead")
-    try:
-        # Get the model
-        model = get_clustering_model_from_registry(model_name, stage)
-        
-        # Apply the model to card data
-        return get_card_data_with_clusters(model)
-    except Exception as e:
-        logger.error(f"Error getting clustered cards from model {model_name}: {e}")
-        raise
+# This function has been removed to avoid duplication.
+# Please use get_card_data_with_clusters() from src.utils.mlflow.get_clustering_model_from_registry directly
 
 
 
-def _log_deck_artifacts(main_deck: List[Dict], extra_deck: List[Dict], metadata: Any) -> None:
-    """
-    Log deck lists and metadata as MLflow artifacts.
-    
-    Args:
-        main_deck: Main deck card list
-        extra_deck: Extra deck card list
-        metadata: Deck metadata
-    """
-    try:
-        # Create deck list in readable format
-        deck_list = {
-            "main_deck": {
-                "size": len(main_deck),
-                "cards": [
-                    {
-                        "name": card.get('name', 'Unknown'),
-                        "type": card.get('type', 'Unknown'),
-                        "archetype": card.get('archetype'),
-                        "cluster_id": card.get('cluster_id')
-                    }
-                    for card in main_deck
-                ]
-            },
-            "extra_deck": {
-                "size": len(extra_deck),
-                "cards": [
-                    {
-                        "name": card.get('name', 'Unknown'),
-                        "type": card.get('type', 'Unknown'),
-                        "archetype": card.get('archetype'),
-                        "cluster_id": card.get('cluster_id')
-                    }
-                    for card in extra_deck
-                ]
-            },
-            "metadata": metadata.to_dict()
-        }
-        
-        # Save deck list as JSON
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
-            json.dump(deck_list, tmp_file, indent=2)
-            tmp_file.flush()
-            mlflow.log_artifact(tmp_file.name, "deck_list.json")
-            os.unlink(tmp_file.name)
-        
-        # Create human-readable deck list
-        readable_deck = []
-        readable_deck.append("=" * 50)
-        readable_deck.append("YU-GI-OH! GENERATED DECK")
-        readable_deck.append("=" * 50)
-        readable_deck.append("")
-        
-        # Main deck by type
-        readable_deck.append(f"MAIN DECK ({len(main_deck)} cards):")
-        readable_deck.append("-" * 30)
-        
-        # Group by card type
-        cards_by_type = {}
-        for card in main_deck:
-            card_type = card.get('type', 'Unknown')
-            if card_type not in cards_by_type:
-                cards_by_type[card_type] = []
-            cards_by_type[card_type].append(card)
-        
-        for card_type in ['Monster', 'Ritual Monster', 'Spell', 'Trap']:
-            if card_type in cards_by_type:
-                readable_deck.append(f"\n{card_type}s ({len(cards_by_type[card_type])}):")
-                for card in sorted(cards_by_type[card_type], key=lambda x: x.get('name', '')):
-                    archetype = card.get('archetype', 'Generic')
-                    readable_deck.append(f"  - {card.get('name', 'Unknown')} [{archetype}]")
-        
-        # Extra deck
-        if extra_deck:
-            readable_deck.append(f"\nEXTRA DECK ({len(extra_deck)} cards):")
-            readable_deck.append("-" * 30)
-            
-            extra_by_type = {}
-            for card in extra_deck:
-                card_type = card.get('type', 'Unknown')
-                if card_type not in extra_by_type:
-                    extra_by_type[card_type] = []
-                extra_by_type[card_type].append(card)
-            
-            for card_type, cards in extra_by_type.items():
-                readable_deck.append(f"\n{card_type}s ({len(cards)}):")
-                for card in sorted(cards, key=lambda x: x.get('name', '')):
-                    archetype = card.get('archetype', 'Generic')
-                    readable_deck.append(f"  - {card.get('name', 'Unknown')} [{archetype}]")
-        
-        # Metadata summary
-        readable_deck.append(f"\nDECK STATISTICS:")
-        readable_deck.append("-" * 30)
-        readable_deck.append(f"Dominant Archetype: {metadata.dominant_archetype}")
-        readable_deck.append(f"Cluster Entropy: {metadata.cluster_entropy:.3f}")
-        readable_deck.append(f"Monster/Spell/Trap: {metadata.monster_count}/{metadata.spell_count}/{metadata.trap_count}")
-        
-        # Save readable deck list
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp_file:
-            tmp_file.write('\n'.join(readable_deck))
-            tmp_file.flush()
-            mlflow.log_artifact(tmp_file.name, "deck_list.txt")
-            os.unlink(tmp_file.name)
-            
-    except Exception as e:
-        logger.error(f"Error logging deck artifacts: {e}")
-        raise
+# This internal function is redundant with log_deck_artifacts and has been removed to reduce duplication
 
 
 def get_recent_deck_runs(experiment_name: str = "yugioh_deck_generation", 
@@ -1323,6 +1108,26 @@ def get_recent_deck_runs(experiment_name: str = "yugioh_deck_generation",
             max_results=limit
         )
         
+        # Convert runs to dictionaries with relevant information
+        run_infos = []
+        for run in runs:
+            run_info = {
+                "run_id": run.info.run_id,
+                "start_time": run.info.start_time,
+                "end_time": run.info.end_time,
+                "status": run.info.status,
+                "metrics": {k: v for k, v in run.data.metrics.items()},
+                "params": {k: v for k, v in run.data.params.items()},
+                "tags": {k: v for k, v in run.data.tags.items()}
+            }
+            run_infos.append(run_info)
+            
+        return run_infos
+        
+    except Exception as e:
+        logger.error(f"Error getting recent deck runs: {e}")
+        return []
+        
         run_info = []
         for run in runs:
             run_data = {
@@ -1340,3 +1145,150 @@ def get_recent_deck_runs(experiment_name: str = "yugioh_deck_generation",
     except Exception as e:
         logger.error(f"Error getting recent deck runs: {e}")
         return []
+
+
+# =====================================
+# GENERAL MLFLOW UTILITIES
+# =====================================
+
+def log_params(params: Dict[str, Any]) -> None:
+    """
+    Log parameters to MLflow, converting numpy types to native Python types.
+    
+    Args:
+        params: Dictionary of parameters to log
+    """
+    for key, value in params.items():
+        # Convert numpy types to native Python types
+        if hasattr(value, 'item'):  # Check if it's a numpy scalar
+            try:
+                value = value.item()  # Convert to native Python type
+            except (ValueError, AttributeError):
+                value = safe_json_serialize(value)
+        elif isinstance(value, (np.ndarray, list, dict)):
+            value = safe_json_serialize(value)
+            
+        mlflow.log_param(key, value)
+    
+    logger.info(f"Logged {len(params)} parameters to MLflow")
+
+
+def log_metrics(metrics: Dict[str, Union[int, float]], step: Optional[int] = None) -> None:
+    """
+    Log metrics to MLflow, converting numpy types to native Python types.
+    
+    Args:
+        metrics: Dictionary of metrics to log
+        step: Optional step value for metrics
+    """
+    for key, value in metrics.items():
+        # Convert numpy types to native Python types
+        if hasattr(value, 'item'):  # Check if it's a numpy scalar
+            value = value.item()  # Convert to native Python type
+        
+        if not isinstance(value, (int, float)):
+            logger.warning(f"Skipping metric '{key}' with non-numeric value: {value}")
+            continue
+            
+        mlflow.log_metric(key, value, step=step)
+    
+    logger.info(f"Logged {len(metrics)} metrics to MLflow")
+
+
+def setup_deck_generation_experiment(experiment_name: str = "yugioh_deck_generation") -> str:
+    """
+    Set up or get the deck generation experiment.
+    
+    Args:
+        experiment_name: Name of the MLflow experiment
+        
+    Returns:
+        Experiment ID
+    """
+    # Use the general-purpose setup_experiment function
+    return setup_experiment(experiment_name)
+
+
+def log_ml_model(model: Any, artifact_path: str = "model", registered_model_name: Optional[str] = None,
+               framework: str = "sklearn", save_input_example: bool = False, input_example: Optional[Any] = None,
+               signature: Optional[Any] = None) -> str:
+    """
+    Log a machine learning model to MLflow.
+    
+    Args:
+        model: Model object to log
+        artifact_path: Path within the run to store the model
+        registered_model_name: Name to register the model under in the Model Registry
+        framework: ML framework the model belongs to (e.g., 'sklearn', 'xgboost', 'pytorch')
+        save_input_example: Whether to save an input example with the model
+        input_example: Example of model input, used for inference
+        signature: Model signature specifying inputs and outputs
+        
+    Returns:
+        URI of the logged model
+    """
+    logger.info(f"Logging {framework} model to MLflow")
+    
+    try:
+        if framework.lower() == "xgboost":
+            import mlflow.xgboost
+            return mlflow.xgboost.log_model(
+                model, 
+                artifact_path=artifact_path,
+                registered_model_name=registered_model_name,
+                input_example=input_example if save_input_example else None,
+                signature=signature
+            ).model_uri
+            
+        elif framework.lower() == "sklearn":
+            import mlflow.sklearn
+            return mlflow.sklearn.log_model(
+                model, 
+                artifact_path=artifact_path,
+                registered_model_name=registered_model_name,
+                input_example=input_example if save_input_example else None,
+                signature=signature
+            ).model_uri
+            
+        elif framework.lower() == "pytorch":
+            import mlflow.pytorch
+            return mlflow.pytorch.log_model(
+                model, 
+                artifact_path=artifact_path,
+                registered_model_name=registered_model_name,
+                input_example=input_example if save_input_example else None,
+                signature=signature
+            ).model_uri
+            
+        else:
+            # Generic fallback using pyfunc
+            import mlflow.pyfunc
+            return mlflow.pyfunc.log_model(
+                artifact_path=artifact_path,
+                python_model=model,
+                registered_model_name=registered_model_name,
+                input_example=input_example if save_input_example else None,
+                signature=signature
+            ).model_uri
+            
+    except Exception as e:
+        logger.error(f"Error logging {framework} model: {e}")
+        raise
+
+
+def log_artifact(local_path: str, artifact_path: Optional[str] = None) -> None:
+    """
+    Log a local file or directory as an MLflow artifact.
+    
+    Args:
+        local_path: Path to the local file or directory to log
+        artifact_path: Optional subdirectory within the MLflow run's artifact directory
+                      where the artifact will be logged
+    """
+    try:
+        mlflow.log_artifact(local_path, artifact_path)
+        logger.info(f"Logged artifact from {local_path} to MLflow" + 
+                   (f" under {artifact_path}" if artifact_path else ""))
+    except Exception as e:
+        logger.error(f"Error logging artifact {local_path}: {e}")
+        raise
