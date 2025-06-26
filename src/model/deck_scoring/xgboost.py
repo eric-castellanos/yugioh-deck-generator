@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import mlflow
 
 from src.utils.s3_utils import read_parquet_from_s3
-from src.utils.mlflow.mlflow_utils import setup_experiment, log_params, log_metrics, log_ml_model, log_artifact
+from src.utils.mlflow.mlflow_utils import setup_experiment, log_params, log_metrics, log_ml_model, log_artifact, log_tags
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -179,8 +179,8 @@ def log_deck_scoring_prediction_tags(version: str = "v1.0") -> None:
         "version": version
     }
     
-    for key, value in tags.items():
-        mlflow.set_tag(key, value)
+    # Use the general-purpose log_tags function
+    log_tags(tags)
 
 if __name__ == "__main__":
     experiment_name = "deck_scoring_xgboost"

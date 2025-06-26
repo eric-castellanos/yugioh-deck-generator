@@ -1292,3 +1292,16 @@ def log_artifact(local_path: str, artifact_path: Optional[str] = None) -> None:
     except Exception as e:
         logger.error(f"Error logging artifact {local_path}: {e}")
         raise
+
+
+def log_tags(tags: Dict[str, str]) -> None:
+    """
+    Log tags to MLflow.
+    
+    Args:
+        tags: Dictionary of tags to log
+    """
+    for key, value in tags.items():
+        mlflow.set_tag(key, str(value))
+    
+    logger.info(f"Logged {len(tags)} tags to MLflow")
