@@ -25,20 +25,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 #nltk.download('punkt')
-nltk.download('punkt_tab')
+#nltk.download('punkt_tab')
 #nltk.download('stopwords')
 
 STOPWORDS = set(stopwords.words("english"))
 
 STRATEGY_KEYWORDS = {
-    'mentions_banish': r'\bbanish\b',
-    'mentions_graveyard': r'\bgraveyard\b',
-    'mentions_draw': r'\bdraw\b',
-    'mentions_search': r'\bsearch\b',
-    'mentions_special_summon': r'\bspecial summon\b',
-    'mentions_negate': r'\bnegate\b',
-    'mentions_destroy': r'\bdestroy\b',
-    'mentions_shuffle': r'\bshuffle\b'
+    'num_banish': r'\bbanish\b',
+    'num_graveyard': r'\bgraveyard\b',
+    'num_draw': r'\bdraw\b',
+    'num_search': r'\bsearch\b',
+    'num_special_summon': r'\bspecial summon\b',
+    'num_negate': r'\bnegate\b',
+    'num_destroy': r'\bdestroy\b',
+    'num_shuffle': r'\bshuffle\b'
 }
 
 def convert_list_columns(df: pd.DataFrame, list_columns: List[str]) -> pd.DataFrame:
@@ -289,9 +289,9 @@ def add_mean_embedding_features_to_decks(deck_df: pd.DataFrame, model_name: str 
 
     return deck_df
 
-def extract_strategy_flags(main_deck: list[dict]) -> dict:
+def count_strategy_keywords(main_deck: list[dict]) -> dict:
     """
-    Returns boolean flags for presence of strategy keywords in card descriptions.
+    Returns counts of how many times each strategy keyword appears across card descriptions.
     """
     text = " ".join(
         card.get("desc", "").lower()
@@ -300,15 +300,12 @@ def extract_strategy_flags(main_deck: list[dict]) -> dict:
     )
 
     return {
-        feature: bool(re.search(pattern, text))
+        feature: len(re.findall(pattern, text))
         for feature, pattern in STRATEGY_KEYWORDS.items()
     }
 
 if __name__ == "__main__":
     deck_df = load_deck_data_from_s3()
-
-    import pdb
-    pdb.set_trace()
 
     # Summoning Mechanic Features
     deck_df['has_tuner'] = deck_df['main_deck'].apply(has_tuner)
@@ -333,8 +330,8 @@ if __name__ == "__main__":
     deck_df = add_mean_embedding_features_to_decks(deck_df, model_name="all-MiniLM-L6-v2")
 
     # Strategy Flag Features
-    strategy_flags_df = pd.DataFrame(deck_df['main_deck'].apply(extract_strategy_flags).tolist(), index=deck_df.index)
-    deck_df = pd.concat([deck_df, strategy_flags_df], axis=1)
+    strat_kw_count_df = pd.DataFrame(deck_df['main_deck'].apply(count_strategy_keywords).tolist(), index=deck_df.index)
+    deck_df = pd.concat([deck_df, strat_kw_count_df], axis=1)
 
     feature_cols = [
     'has_tuner',
@@ -351,14 +348,14 @@ if __name__ == "__main__":
     'num_unique_monsters',
     'main_deck_mean_tfidf',
     'main_deck_mean_embedding',
-    'mentions_banish',
-    'mentions_graveyard',
-    'mentions_draw',
-    'mentions_search',
-    'mentions_special_summon',
-    'mentions_negate',
-    'mentions_destroy',
-    'mentions_shuffle'
+    'num_banish',
+    'num_graveyard',
+    'num_draw',
+    'num_search',
+    'num_special_summon',
+    'num_negate',
+    'num_destroy',
+    'num_shuffle'
     ]
 
     for col in feature_cols:
