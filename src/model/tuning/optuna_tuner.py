@@ -1,10 +1,11 @@
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, List
 import os
 
 import matplotlib.pyplot as plt
 import optuna
 import xgboost as xgb
 from xgboost.callback import EarlyStopping
+from xgboost import XGBRegressor, plot_importance
 import numpy as np
 from sklearn.metrics import root_mean_squared_error
 import mlflow
@@ -16,7 +17,8 @@ def tune_xgboost_model(
     y_train: np.ndarray,
     X_val: np.ndarray,
     y_val: np.ndarray,
-    n_trials: int = 50
+    n_trials: int = 50,
+    feature_names: List[Any] = [],
 ) -> Tuple[xgb.XGBRegressor, Dict[str, Any]]:
     """
     Tune XGBoost hyperparameters using Optuna and return the best model and parameters.
@@ -60,6 +62,9 @@ def tune_xgboost_model(
     best_model = xgb.XGBRegressor(**best_params)
     best_model.fit(X_train, y_train)
 
+    booster = best_model.get_booster()
+    booster.feature_names = feature_names
+
     # Evaluate on validation set
     preds = best_model.predict(X_val)
     rmse = root_mean_squared_error(y_val, preds)
@@ -71,6 +76,9 @@ def tune_xgboost_model(
 
     plot_path = plot_optuna_loss_curve(study)
     log_artifact(plot_path, artifact_path="visualizations")
+
+    feature_plot_path = plot_feature_importance(booster, importance_type="gain")
+    log_artifact(feature_plot_path, artifact_path="visualizations")
 
     return best_model, best_params
 
@@ -98,4 +106,31 @@ def plot_optuna_loss_curve(study: optuna.Study, output_path: str = "artifacts/op
     plt.legend()
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    return output_path
+
+def plot_feature_importance(
+    model: XGBRegressor, 
+    output_path: str = "artifacts/xgboost_feature_importance.png", 
+    importance_type: str = "gain"
+) -> str:
+    """
+    Plots the feature importance of an XGBoost model and saves the figure.
+
+    Args:
+        model (XGBRegressor): Trained XGBoost model.
+        output_path (str): Path to save the feature importance plot.
+        importance_type (str): Type of importance to plot ("weight", "gain", "cover", 
+                               "total_gain", or "total_cover").
+
+    Returns:
+        str: The path to the saved plot image.
+    """
+    plt.figure(figsize=(10, 6))
+    plot_importance(model, importance_type=importance_type, show_values=False)
+    plt.title(f"XGBoost Feature Importance ({importance_type})")
+    plt.tight_layout()
+    
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
     return output_path

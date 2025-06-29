@@ -39,6 +39,7 @@ umap-learn = "^0.5.4"
 
 [tool.poetry.group.deck_scoring.dependencies]
 xgboost = "^2.1.4"
+optuna = "^4.4.0"
 
 # Data processing and analysis
 numpy = "^1.23.5"
