@@ -1,11 +1,13 @@
-import mlflow
-import tempfile
-import json
-import os
-import numpy as np
-from mlflow.tracking import MlflowClient
 from typing import Dict, Any, Optional, List, Union
 import logging
+import json
+import os
+import tempfile
+
+import mlflow
+import numpy as np
+from mlflow.tracking import MlflowClient
+import torch
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -106,6 +108,19 @@ def log_ml_model(model: Any, artifact_path: str = "model", framework: str = "skl
 
 def register_model(model_uri: str, registered_model_name: str) -> str:
     try:
+        # Check if the registered model exists; if not, create it
+        if not client.get_registered_model(registered_model_name):
+            client.create_registered_model(registered_model_name)
+
+    except mlflow.exceptions.RestException as e:
+        if "RESOURCE_DOES_NOT_EXIST" in str(e):
+            logger.info(f"Creating new registered model: {registered_model_name}")
+            client.create_registered_model(registered_model_name)
+        else:
+            logger.error(f"Error accessing model registry: {e}")
+            raise
+
+    try:
         result = client.create_model_version(
             name=registered_model_name,
             source=model_uri,
@@ -113,6 +128,7 @@ def register_model(model_uri: str, registered_model_name: str) -> str:
         )
         logger.info(f"Model registered: {result.name} v{result.version}")
         return f"models:/{result.name}/{result.version}"
+
     except Exception as e:
         logger.error(f"Error registering model: {e}")
         raise
@@ -364,3 +380,41 @@ def determine_if_final_model(run_data: Dict[str, Any]) -> bool:
         f"noise={noise_pct:.1f}%, features={feature_type} -> {'YES' if is_final else 'NO'}"
     )
     return is_final
+
+def log_pytorch_model(model: torch.nn.Module,
+                      artifact_path: str = "model",
+                      model_name: Optional[str] = None,
+                      input_example: Optional[Any] = None,
+                      signature: Optional[Any] = None,
+                      register: bool = False,
+                      registered_model_name: Optional[str] = None) -> str:
+    """
+    Logs a PyTorch model to MLflow and optionally registers it.
+    """
+    import mlflow.pytorch
+
+    try:
+        logger.info(f"Logging PyTorch model {model_name or ''} to artifact path '{artifact_path}'")
+
+        # Convert torch.Tensor to numpy
+        if isinstance(input_example, torch.Tensor):
+            input_example = input_example.cpu().detach().numpy()
+
+        model_uri = mlflow.pytorch.log_model(
+            pytorch_model=model,
+            artifact_path=artifact_path,
+            input_example=input_example,
+            signature=signature
+        ).model_uri
+
+        if register and registered_model_name:
+            registered_uri = register_model(model_uri, registered_model_name)
+            logger.info(f"Registered model under: {registered_uri}")
+            return registered_uri
+
+        return model_uri
+
+    except Exception as e:
+        logger.error(f"Error logging PyTorch model: {e}")
+        raise
+
