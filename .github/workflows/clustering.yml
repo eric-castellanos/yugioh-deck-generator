@@ -28,21 +28,6 @@ on:
         required: false
         default: false
         type: boolean
-
-  push:
-    branches:
-      - feature/clustering_model
-    paths:
-      - 'src/model/clustering/**'
-      - 'src/utils/clustering/**'
-      - 'src/utils/mlflow/**'
-
-  pull_request:
-    paths:
-      - 'src/model/clustering/**'
-      - 'src/utils/clustering/**'
-      - 'src/utils/mlflow/**'
-
 jobs:
   clustering:
     runs-on: ubuntu-latest

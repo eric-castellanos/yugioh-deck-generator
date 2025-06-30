@@ -2,11 +2,13 @@ import os
 import logging
 from datetime import datetime
 import io
+from typing import Optional, Dict, Any, Union
 
 import boto3
 import s3fs
 from botocore.exceptions import BotoCoreError, ClientError
 import polars as pl
+import pandas as pd
 
 
 def upload_to_s3(
@@ -56,4 +58,45 @@ def read_parquet_from_s3(bucket: str, key: str) -> pl.DataFrame:
 
     except (BotoCoreError, ClientError) as e:
         logging.exception(f"Failed to read s3://{bucket}/{key}")
+        raise
+
+def read_csv_from_s3(
+    bucket: str, 
+    key: str, 
+    pandas_kwargs: Optional[Dict[str, Any]] = None,
+    use_polars: bool = False
+) -> Union[pd.DataFrame, pl.DataFrame]:
+    """
+    Reads a CSV file from S3 and returns it as a DataFrame.
+
+    Parameters:
+    -----------
+    bucket : str
+        Name of the S3 bucket
+    key : str
+        Key (path) to the CSV file in S3
+    pandas_kwargs : dict, optional
+        Additional keyword arguments to pass to pandas.read_csv
+    use_polars : bool, default=False
+        If True, returns a Polars DataFrame, otherwise returns Pandas
+
+    Returns:
+    --------
+    Union[pd.DataFrame, pl.DataFrame]
+        DataFrame containing the file's contents
+    """
+    try:
+        logging.info(f"Reading CSV from s3://{bucket}/{key}")
+        s3_client = boto3.client("s3")
+        obj = s3_client.get_object(Bucket=bucket, Key=key)
+        data = obj["Body"].read()
+        
+        if use_polars:
+            return pl.read_csv(io.BytesIO(data))
+        else:
+            kwargs = pandas_kwargs or {}
+            return pd.read_csv(io.BytesIO(data), **kwargs)
+
+    except (BotoCoreError, ClientError) as e:
+        logging.exception(f"Failed to read CSV s3://{bucket}/{key}")
         raise

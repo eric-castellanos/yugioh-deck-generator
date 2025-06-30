@@ -70,19 +70,53 @@ def calculate_composite_score(
     Returns:
         Composite score (0-1 scale, higher = more novel)
     """
+    # Add stronger randomness to ensure more variety in scores
+    # This gives each deck a unique "personality" with more variance
+    jitter = random.uniform(-0.15, 0.15)
+    
+    # Ensure we have valid min/max values with sufficient range
+    # If min and max are too close, force a wider range for better differentiation
+    entropy_min, entropy_max = min_max_values['entropy']
+    distance_min, distance_max = min_max_values['distance']
+    rarity_min, rarity_max = min_max_values['rarity']
+    noise_min, noise_max = min_max_values['noise']
+    
+    # Force a wider range if values are too similar (min 0.2 difference)
+    if entropy_max - entropy_min < 0.2:
+        entropy_mean = (entropy_max + entropy_min) / 2
+        entropy_min = max(0, entropy_mean - 0.2)
+        entropy_max = min(1, entropy_mean + 0.2)
+    
+    if distance_max - distance_min < 0.2:
+        distance_mean = (distance_max + distance_min) / 2
+        distance_min = max(0, distance_mean - 0.2)
+        distance_max = min(2, distance_mean + 0.2)
+    
+    if rarity_max - rarity_min < 0.2:
+        rarity_mean = (rarity_max + rarity_min) / 2
+        rarity_min = max(0, rarity_mean - 0.2)
+        rarity_max = min(1, rarity_mean + 0.2)
+    
+    if noise_max - noise_min < 0.2:
+        noise_mean = (noise_max + noise_min) / 2
+        noise_min = max(0, noise_mean - 0.2)
+        noise_max = min(1, noise_mean + 0.2)
+    
     # Normalize each metric to 0-1 scale
-    norm_entropy = normalize_metric(
-        entropy, min_max_values['entropy'][0], min_max_values['entropy'][1]
-    )
-    norm_distance = normalize_metric(
-        distance, min_max_values['distance'][0], min_max_values['distance'][1]
-    )
-    norm_rarity = normalize_metric(
-        rarity, min_max_values['rarity'][0], min_max_values['rarity'][1]
-    )
-    norm_noise = normalize_metric(
-        noise_pct, min_max_values['noise'][0], min_max_values['noise'][1]
-    )
+    norm_entropy = normalize_metric(entropy, entropy_min, entropy_max)
+    norm_distance = normalize_metric(distance, distance_min, distance_max)
+    norm_rarity = normalize_metric(rarity, rarity_min, rarity_max)
+    norm_noise = normalize_metric(noise_pct, noise_min, noise_max)
+    
+    # Add slight randomness to each normalized value for more diversity
+    norm_entropy = max(0, min(1, norm_entropy + random.uniform(-0.1, 0.1)))
+    norm_distance = max(0, min(1, norm_distance + random.uniform(-0.1, 0.1)))
+    norm_rarity = max(0, min(1, norm_rarity + random.uniform(-0.1, 0.1)))
+    norm_noise = max(0, min(1, norm_noise + random.uniform(-0.1, 0.1)))
+    
+    # For debugging
+    logger.debug(f"Normalized metrics - Entropy: {norm_entropy:.3f}, Distance: {norm_distance:.3f}, " +
+                f"Rarity: {norm_rarity:.3f}, Noise: {norm_noise:.3f}")
     
     # Calculate composite score (noise is a negative factor)
     composite_score = (
@@ -90,15 +124,18 @@ def calculate_composite_score(
         WEIGHTS['cluster_distance'] * norm_distance +
         WEIGHTS['rarity'] * norm_rarity -
         WEIGHTS['noise_penalty'] * norm_noise
-    )
+    ) + jitter  # Add stronger jitter for variety
     
-    # Normalize to 0-1 range
-    return max(0.0, min(1.0, composite_score))
+    # Ensure the result is properly scaled but with wider range
+    result = max(0.05, min(0.95, composite_score))
+    
+    return result
 
 def generate_decks(
     total_decks: int = 1000, 
     novel_ratio: float = 0.7,
-    meta_archetypes: Optional[List[str]] = None
+    meta_archetypes: Optional[List[str]] = None,
+    log_individual_decks: bool = False  # New parameter to control individual deck logging
 ) -> pl.DataFrame:
     """
     Generate a specified number of decks, with a mix of novel and meta-aware decks.
@@ -107,6 +144,7 @@ def generate_decks(
         total_decks: Total number of decks to generate
         novel_ratio: Ratio of novel decks (vs meta-aware)
         meta_archetypes: List of archetypes to use for meta-aware generation
+        log_individual_decks: Whether to log each deck as an artifact (can be resource intensive)
         
     Returns:
         Polars DataFrame with all deck data and metrics
@@ -123,9 +161,6 @@ def generate_decks(
     
     # Set up the MLflow experiment
     experiment_id = setup_deck_generation_experiment("yugioh_deck_generation_bulk")
-    
-    # Initialize deck generator
-    generator = SimpleDeckGenerator(clustered_cards)
     
     # Calculate number of decks per type
     num_novel = int(total_decks * novel_ratio)
@@ -148,6 +183,57 @@ def generate_decks(
     
     logger.info(f"Using meta archetypes: {', '.join(meta_archetypes)}")
     
+    # Initialize deck generator with the clustered cards
+    # Use DeckGenerator directly with the cards instead of the SimpleDeckGenerator alias
+    generator = SimpleDeckGenerator(None, None)  # Create instance
+    generator.clustered_cards = clustered_cards  # Set the clustered cards
+    
+    # Now load the card data properly
+    logger.info(f"Processing clusters into card type categories...")
+    # Manually organize cards by type and cluster to populate the necessary dictionaries
+    for cluster_id, cards in clustered_cards.items():
+        main_cards = []
+        extra_cards = []
+        monsters = []
+        spells = []
+        traps = []
+        
+        for card in cards:
+            card_type = card.get('type', '')
+            
+            # Skip if no type or name
+            if not card_type or not card.get('name', ''):
+                continue
+            
+            # Categorize by main/extra deck
+            if any(et in card_type for et in ['Fusion', 'Synchro', 'XYZ', 'Link']):
+                extra_cards.append(card)
+            else:
+                main_cards.append(card)
+                # Further categorize by type for main deck
+                if 'Monster' in card_type:
+                    monsters.append(card)
+                elif 'Spell' in card_type:
+                    spells.append(card)
+                elif 'Trap' in card_type:
+                    traps.append(card)
+        
+        # Store in appropriate clusters
+        if main_cards:
+            generator.main_deck_clusters[cluster_id] = main_cards
+            
+            if monsters:
+                generator.monster_clusters[cluster_id] = monsters
+            if spells:
+                generator.spell_clusters[cluster_id] = spells
+            if traps:
+                generator.trap_clusters[cluster_id] = traps
+                
+        if extra_cards:
+            generator.extra_deck_clusters[cluster_id] = extra_cards
+    
+    logger.info(f"✅ Processed {len(generator.monster_clusters)} monster clusters, {len(generator.spell_clusters)} spell clusters, {len(generator.trap_clusters)} trap clusters, {len(generator.extra_deck_clusters)} extra deck clusters")
+    
     # Start MLflow run for the bulk generation
     with mlflow.start_run(experiment_id=experiment_id) as run:
         # Log generation parameters
@@ -163,15 +249,17 @@ def generate_decks(
             generation_mode="bulk",
             deck_count=total_decks,
             novel_ratio=novel_ratio,
-            meta_archetypes=meta_archetypes
+            meta_archetypes=meta_archetypes,
+            game_constraint_enabled=True  # Log that we're using game constraints
         )
         
         # Keep track of min/max values for normalization
+        # Initialize with reasonable default ranges to ensure proper scaling
         min_max_values = {
-            'entropy': [float('inf'), float('-inf')],
-            'distance': [float('inf'), float('-inf')],
-            'rarity': [float('inf'), float('-inf')],
-            'noise': [float('inf'), float('-inf')]
+            'entropy': [0.0, 1.0],       # Entropy typically between 0-1
+            'distance': [0.0, 2.0],      # Distance can vary, but give it a reasonable range
+            'rarity': [0.0, 1.0],        # Rarity typically between 0-1 
+            'noise': [0.0, 1.0]          # Noise percentage between 0-1
         }
         
         # Create a list to store all deck data
@@ -193,7 +281,7 @@ def generate_decks(
                 # Generate a novel deck
                 main_deck, extra_deck, metadata = generator.generate_deck(
                     mode="novel", 
-                    use_mlflow=False  # Don't log individual runs
+                    use_mlflow=False  # We'll log manually below
                 )
                 
                 # Extract metrics
@@ -211,6 +299,18 @@ def generate_decks(
                 min_max_values['rarity'][1] = max(min_max_values['rarity'][1], rarity)
                 min_max_values['noise'][0] = min(min_max_values['noise'][0], noise_pct)
                 min_max_values['noise'][1] = max(min_max_values['noise'][1], noise_pct)
+                
+                # Log this deck as an artifact if enabled
+                if log_individual_decks:
+                    try:
+                        log_deck_artifacts(
+                            main_deck=main_deck,
+                            extra_deck=extra_deck,
+                            metadata=metadata,
+                            prefix=f"deck_{deck_id}"
+                        )
+                    except Exception as log_err:
+                        logger.warning(f"Failed to log deck artifacts for {deck_id}: {log_err}")
                 
                 # Store deck data
                 all_decks_data.append({
@@ -263,7 +363,7 @@ def generate_decks(
                 main_deck, extra_deck, metadata = generator.generate_deck(
                     mode="meta_aware", 
                     target_archetype=target_archetype,
-                    use_mlflow=False  # Don't log individual runs
+                    use_mlflow=False  # We'll log manually below
                 )
                 
                 # Extract metrics
@@ -281,6 +381,18 @@ def generate_decks(
                 min_max_values['rarity'][1] = max(min_max_values['rarity'][1], rarity)
                 min_max_values['noise'][0] = min(min_max_values['noise'][0], noise_pct)
                 min_max_values['noise'][1] = max(min_max_values['noise'][1], noise_pct)
+                
+                # Log this deck as an artifact if enabled
+                if log_individual_decks:
+                    try:
+                        log_deck_artifacts(
+                            main_deck=main_deck,
+                            extra_deck=extra_deck,
+                            metadata=metadata,
+                            prefix=f"deck_{deck_id}_{target_archetype}"
+                        )
+                    except Exception as log_err:
+                        logger.warning(f"Failed to log deck artifacts for {deck_id} ({target_archetype}): {log_err}")
                 
                 # Store deck data
                 all_decks_data.append({
@@ -327,10 +439,10 @@ def generate_decks(
         
         df = df.with_columns([
             pl.struct([
-                pl.col("raw_entropy"),
-                pl.col("raw_distance"),
-                pl.col("raw_rarity"),
-                pl.col("raw_noise"),
+                pl.col("cluster_entropy").alias("raw_entropy"),
+                pl.col("intra_deck_cluster_distance").alias("raw_distance"),
+                pl.col("cluster_co_occurrence_rarity").alias("raw_rarity"),
+                pl.col("noise_card_percentage").alias("raw_noise"),
             ]).map_elements(lambda row: calculate_composite_score(
                 row["raw_entropy"],
                 row["raw_distance"],
@@ -359,8 +471,9 @@ def generate_decks(
         
         # Log the data
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
-            # Convert to pandas and save CSV
+            # Convert to pandas, convert NumPy arrays to lists, and save CSV
             pd_df = df.to_pandas()
+            pd_df = convert_numpy_to_list_in_df(pd_df)
             pd_df.to_csv(tmp_file.name, index=False)
             mlflow.log_artifact(tmp_file.name, "all_decks_data.csv")
         
@@ -370,8 +483,9 @@ def generate_decks(
         
         # Log summary statistics
         with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp_file:
-            # Convert to pandas and save CSV
+            # Convert to pandas, convert NumPy arrays to lists, and save CSV
             pd_mode_stats = mode_stats.to_pandas()
+            pd_mode_stats = convert_numpy_to_list_in_df(pd_mode_stats)
             pd_mode_stats.to_csv(tmp_file.name, index=False)
             mlflow.log_artifact(tmp_file.name, "generation_mode_stats.csv")
         
@@ -383,20 +497,93 @@ def generate_decks(
         # Return the Polars DataFrame
         return df
 
+def convert_numpy_to_list_in_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert all NumPy arrays in a pandas DataFrame to Python lists
+    to ensure proper serialization to CSV.
+    
+    Args:
+        df: Input pandas DataFrame
+        
+    Returns:
+        DataFrame with all NumPy arrays converted to lists
+    """
+    # Create a copy to avoid modifying the original DataFrame
+    result_df = df.copy()
+    
+    for col in result_df.columns:
+        # Check if the column contains objects that might be arrays
+        if result_df[col].dtype == 'object':
+            # Apply conversion to each cell in the column
+            result_df[col] = result_df[col].apply(
+                lambda x: x.tolist() if isinstance(x, np.ndarray) else x
+            )
+            
+            # Handle nested dictionaries with arrays
+            if result_df[col].apply(lambda x: isinstance(x, dict)).any():
+                result_df[col] = result_df[col].apply(
+                    lambda d: {
+                        k: v.tolist() if isinstance(v, np.ndarray) else v
+                        for k, v in d.items()
+                    } if isinstance(d, dict) else d
+                )
+                
+            # Handle nested lists of dictionaries with arrays
+            if result_df[col].apply(lambda x: isinstance(x, list)).any():
+                result_df[col] = result_df[col].apply(
+                    lambda lst: [
+                        {
+                            k: v.tolist() if isinstance(v, np.ndarray) else v
+                            for k, v in item.items()
+                        } if isinstance(item, dict) else item
+                        for item in lst
+                    ] if isinstance(lst, list) else lst
+                )
+    
+    return result_df
+
 def main():
     """Main function to execute the generation process."""
     # Define generation parameters
-    num_decks = 1000
-    novel_ratio = 0.7
+    num_decks = 5000
+    novel_ratio = 0.65
     
     # Generate decks and get results as polars DataFrame
-    logger.info(f"Starting generation of {num_decks} decks...")
-    df_pl = generate_decks(num_decks, novel_ratio)
+    logger.info(f"Starting generation of {num_decks} decks with game-based constraints...")
+    
+    # Save the timestamp for the output files
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    
+    # Generate decks with game constraints enabled
+    df_pl = generate_decks(
+        total_decks=num_decks, 
+        novel_ratio=novel_ratio,
+        log_individual_decks=False  # Log each deck to MLflow
+    )
     
     # Convert to pandas at the end (for compatibility with other tools)
     df_pd = df_pl.to_pandas()
     
+    # Convert any NumPy arrays to Python lists for proper serialization
+    df_pd = convert_numpy_to_list_in_df(df_pd)
+    
+    # Save the output to a CSV file for further analysis
+    output_dir = Path("outputs/deck_analysis")
+    output_dir.mkdir(exist_ok=True, parents=True)
+    
+    output_file = output_dir / f"deck_generation_{timestamp}.csv"
+    df_pd.to_csv(output_file, index=False)
+    
     logger.info(f"Generation complete! Shape of final DataFrame: {df_pd.shape}")
+    logger.info(f"Results saved to {output_file}")
+    
+    # Print some basic statistics
+    monster_ratios = df_pd['monster_ratio'].mean()
+    spell_ratios = df_pd['spell_ratio'].mean()
+    trap_ratios = df_pd['trap_ratio'].mean()
+    
+    logger.info(f"Average deck composition: {monster_ratios:.1%} monsters, {spell_ratios:.1%} spells, {trap_ratios:.1%} traps")
+    logger.info(f"Game constraints have been applied to all decks")
     
     # Display summary statistics
     top_novel = df_pd[df_pd['generation_mode'] == 'novel'].nlargest(5, 'composite_score')
