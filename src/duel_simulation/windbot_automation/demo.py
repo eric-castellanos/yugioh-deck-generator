@@ -21,7 +21,8 @@ def main():
     
     # Configure automation
     config = AutomationConfig(
-        edopro_path="/home/ecast229/Applications/EDOPro/EDOPro",
+        edopro_path="/home/ecast229/Applications/EDOPro",  # Directory path, not executable
+        windbot_path="/home/ecast229/Projects/yugioh-deck-generator/Applications/WindBot/WindBot.exe",  # Full path to WindBot executable
         debug=True,
         save_replays=True,
         duel_timeout=60  # Shorter timeout for demo
