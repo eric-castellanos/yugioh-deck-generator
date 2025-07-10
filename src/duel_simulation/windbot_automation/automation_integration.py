@@ -20,7 +20,6 @@ from dataclasses import dataclass, asdict
 sys.path.insert(0, str(Path(__file__).parent))
 
 from windbot_wrapper import WindBotWrapper, DuelConfig, DuelResult
-from ygopro_server import YGOProServer, ServerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +52,7 @@ class YGOProAutomation:
             config: Automation configuration
         """
         self.config = config
-        self.server = None
         self.windbot_wrapper = None
-        self.active_sessions = {}
         
         # Setup logging
         log_level = logging.DEBUG if config.debug else logging.INFO
@@ -68,11 +65,8 @@ class YGOProAutomation:
         self._initialize_components()
     
     def _initialize_components(self):
-        """Initialize server and WindBot wrapper."""
+        """Initialize WindBot wrapper."""
         logger.info("Initializing automation components...")
-        
-        # Initialize server
-        self.server = YGOProServer(edopro_path=self.config.edopro_path)
         
         # Initialize WindBot wrapper
         try:
@@ -107,16 +101,7 @@ class YGOProAutomation:
         """
         logger.info(f"Starting duel: {deck1_name} vs {deck2_name}")
         
-        session_id = f"{deck1_name}_vs_{deck2_name}_{int(time.time())}"
-        
         try:
-            # Start server
-            server_config = ServerConfig(port=self.config.server_port)
-            port = self.server.start_server(server_config)
-            
-            # Update WindBot wrapper with correct port
-            self.windbot_wrapper.server_port = port
-            
             # Configure duel
             duel_config = DuelConfig(
                 deck1_path=deck1_path,
@@ -127,46 +112,13 @@ class YGOProAutomation:
                 debug=self.config.debug
             )
             
-            # Store session info
-            self.active_sessions[session_id] = {
-                'config': duel_config,
-                'start_time': time.time(),
-                'status': 'starting'
-            }
-            
-            # Start monitoring duel on server side
-            import threading
-            server_monitor = threading.Thread(
-                target=self._monitor_server_duel,
-                args=(session_id,)
-            )
-            server_monitor.start()
-            
-            # Simulate duel using WindBot
+            # Simulate duel using WindBot directly (no separate server needed)
             result = self.windbot_wrapper.simulate_duel(duel_config)
-            
-            # Wait for server monitoring to complete
-            server_monitor.join(timeout=10)
-            
-            # Add replay information if available
-            if self.config.save_replays:
-                replay_path = self.server.get_replay_path()
-                if replay_path:
-                    result.replay_path = replay_path
-                    logger.info(f"Replay saved: {replay_path}")
-            
-            # Clean up session
-            if session_id in self.active_sessions:
-                del self.active_sessions[session_id]
             
             return result
             
         except Exception as e:
             logger.error(f"Error in duel simulation: {e}")
-            
-            # Clean up on error
-            if session_id in self.active_sessions:
-                del self.active_sessions[session_id]
             
             return DuelResult(
                 winner=-1,
@@ -176,29 +128,6 @@ class YGOProAutomation:
                 deck1_name=deck1_name,
                 deck2_name=deck2_name
             )
-        
-        finally:
-            # Stop server
-            self.server.stop_server()
-    
-    def _monitor_server_duel(self, session_id: str):
-        """Monitor duel progress on the server side."""
-        if session_id not in self.active_sessions:
-            return
-        
-        session = self.active_sessions[session_id]
-        session['status'] = 'monitoring'
-        
-        try:
-            # Monitor the duel
-            result = self.server.monitor_duel(timeout=self.config.duel_timeout)
-            session['server_result'] = result
-            session['status'] = 'completed'
-            
-        except Exception as e:
-            logger.error(f"Server monitoring error: {e}")
-            session['status'] = 'error'
-            session['error'] = str(e)
     
     def simulate_tournament(self, 
                           deck_paths: List[str],
@@ -367,14 +296,8 @@ class YGOProAutomation:
         """Clean up automation system resources."""
         logger.info("Cleaning up automation system...")
         
-        if self.server:
-            self.server.cleanup()
-        
         if self.windbot_wrapper:
             self.windbot_wrapper.cleanup()
-        
-        # Clean up any active sessions
-        self.active_sessions.clear()
 
 
 def main():

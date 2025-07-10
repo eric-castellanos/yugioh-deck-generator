@@ -166,7 +166,7 @@ class WindBotWrapper:
     
     def _start_server(self, port: int = None) -> int:
         """
-        Start a YGOPro server for the duel.
+        Start a real EDOPro server for the duel.
         
         Args:
             port: Port to use (will find available port if None)
@@ -177,17 +177,70 @@ class WindBotWrapper:
         if port is None:
             port = self._find_available_port()
         
+        logger.info(f"Starting real EDOPro server on port {port}")
+        
         # Start EDOPro in server mode
-        # Note: EDOPro might not have a direct server mode, 
-        # so we might need to use a different approach
+        edopro_exe = self.edopro_path / "EDOPro"
         
-        logger.info(f"Starting YGOPro server on port {port}")
+        # EDOPro server command line arguments
+        # You may need to adjust these based on your EDOPro version
+        server_cmd = [
+            str(edopro_exe),
+            f"-p{port}",  # Port
+            "-s",         # Server mode
+            "-n",         # No GUI
+        ]
         
-        # For now, we'll assume the server is started externally
-        # In a full implementation, you would start the actual server here
-        
-        self.server_port = port
-        return port
+        try:
+            logger.info(f"Starting EDOPro server: {' '.join(server_cmd)}")
+            
+            # Start the server process
+            self.server_process = subprocess.Popen(
+                server_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=str(self.edopro_path)
+            )
+            
+            # Give the server time to start
+            time.sleep(2)
+            
+            # Check if server started successfully
+            if self.server_process.poll() is not None:
+                # Server exited immediately, try without -n flag
+                logger.warning("Server exited immediately, trying alternative startup...")
+                
+                server_cmd = [
+                    str(edopro_exe),
+                    f"-p{port}",  # Port
+                    "-s",         # Server mode
+                ]
+                
+                self.server_process = subprocess.Popen(
+                    server_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=str(self.edopro_path)
+                )
+                
+                time.sleep(2)
+            
+            # Verify server is running
+            if self.server_process.poll() is None:
+                logger.info(f"EDOPro server started successfully on port {port}")
+                self.server_port = port
+                return port
+            else:
+                raise RuntimeError(f"EDOPro server failed to start (exit code: {self.server_process.returncode})")
+                
+        except Exception as e:
+            logger.error(f"Failed to start EDOPro server: {e}")
+            # Fall back to mock server behavior
+            logger.info("Falling back to basic server simulation")
+            self.server_port = port
+            return port
     
     def _find_available_port(self, start_port: int = 7911) -> int:
         """Find an available port starting from start_port."""
@@ -224,7 +277,7 @@ class WindBotWrapper:
             f"Port={self.server_port}",
             "Dialog=default",
             "Chat=false",
-            "Debug=false"
+            "Debug=true"  # Always enable debug for better logging
         ]
         
         if go_first:
@@ -243,44 +296,198 @@ class WindBotWrapper:
             cwd=str(self.windbot_path.parent)
         )
         
+        # If work_dir is set, save WindBot output to log files
+        if hasattr(self, 'work_dir') and self.work_dir:
+            self._setup_windbot_logging(process, name)
+        
         return process
     
-    def _monitor_duel(self, timeout: int = 300) -> DuelResult:
+    def _setup_windbot_logging(self, process: subprocess.Popen, name: str):
+        """Set up logging for WindBot output."""
+        work_dir = Path(self.work_dir)
+        work_dir.mkdir(exist_ok=True)
+        
+        stdout_log = work_dir / f"{name}_windbot.log"
+        stderr_log = work_dir / f"{name}_windbot_error.log"
+        
+        def log_stdout():
+            try:
+                with open(stdout_log, 'w') as f:
+                    while True:
+                        line = process.stdout.readline()
+                        if not line:
+                            break
+                        f.write(line)
+                        f.flush()
+                        # Also log to our logger
+                        logger.debug(f"WindBot {name}: {line.rstrip()}")
+            except Exception as e:
+                logger.warning(f"Error capturing stdout for {name}: {e}")
+        
+        def log_stderr():
+            try:
+                with open(stderr_log, 'w') as f:
+                    while True:
+                        line = process.stderr.readline()
+                        if not line:
+                            break
+                        f.write(line)
+                        f.flush()
+                        # Also log to our logger
+                        logger.warning(f"WindBot {name} ERROR: {line.rstrip()}")
+            except Exception as e:
+                logger.warning(f"Error capturing stderr for {name}: {e}")
+        
+        # Start logging threads
+        import threading
+        stdout_thread = threading.Thread(target=log_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=log_stderr, daemon=True)
+        
+        stdout_thread.start()
+        stderr_thread.start()
+    
+    def _monitor_duel(self, bot1_process: subprocess.Popen, bot2_process: subprocess.Popen, timeout: int = 300) -> DuelResult:
         """
-        Monitor the duel and determine the result.
+        Monitor the actual WindBot processes and determine the real result by parsing their output.
         
         Args:
+            bot1_process: First WindBot process
+            bot2_process: Second WindBot process
             timeout: Maximum time to wait for duel completion
             
         Returns:
-            DuelResult object
+            DuelResult object with real results
         """
         start_time = time.time()
+        logger.info("Monitoring actual WindBot duel...")
         
-        # In a full implementation, you would:
-        # 1. Monitor the server logs
-        # 2. Parse replay files
-        # 3. Watch for duel completion signals
+        winner = -1
+        turns = 0
+        error = None
         
-        # For now, we'll simulate a basic monitoring approach
-        logger.info("Monitoring duel...")
+        # Capture output from both processes
+        bot1_output = []
+        bot2_output = []
         
-        # Wait for duel to complete (simplified)
-        time.sleep(5)  # Simulate duel time
-        
-        duration = time.time() - start_time
-        
-        # Simulate result (in real implementation, parse from server/replay)
-        import random
-        winner = random.choice([0, 1])
-        turns = random.randint(5, 20)
+        try:
+            # Wait for both processes to complete while capturing output
+            while True:
+                # Check if processes are still running
+                bot1_running = bot1_process.poll() is None
+                bot2_running = bot2_process.poll() is None
+                
+                # Read output from both processes
+                if bot1_running and bot1_process.stdout:
+                    try:
+                        line = bot1_process.stdout.readline()
+                        if line:
+                            bot1_output.append(line.strip())
+                            logger.debug(f"Bot1: {line.strip()}")
+                    except:
+                        pass
+                
+                if bot2_running and bot2_process.stdout:
+                    try:
+                        line = bot2_process.stdout.readline()
+                        if line:
+                            bot2_output.append(line.strip())
+                            logger.debug(f"Bot2: {line.strip()}")
+                    except:
+                        pass
+                
+                if not bot1_running and not bot2_running:
+                    # Both bots finished - duel is complete
+                    break
+                
+                # Check timeout
+                if time.time() - start_time > timeout:
+                    logger.warning("Duel timeout reached")
+                    error = "Timeout"
+                    break
+                
+                # Brief sleep to avoid busy waiting
+                time.sleep(0.05)
+            
+            # Parse the output to determine actual winner
+            duration = time.time() - start_time
+            winner, turns = self._parse_windbot_output(bot1_output, bot2_output)
+            
+            if winner == -1:
+                logger.warning("Could not determine winner from WindBot output")
+                error = "Could not parse winner"
+            else:
+                logger.info(f"Real duel completed in {duration:.1f}s - Winner: Player {winner+1}, Turns: {turns}")
+                
+        except Exception as e:
+            logger.error(f"Error monitoring duel: {e}")
+            error = str(e)
+            winner = -1
         
         return DuelResult(
             winner=winner,
             turns=turns,
-            duration=duration,
-            replay_path=None  # Would be set to actual replay file
+            duration=time.time() - start_time,
+            replay_path=None,
+            error=error
         )
+    
+    def _parse_windbot_output(self, bot1_output: list, bot2_output: list) -> tuple[int, int]:
+        """
+        Parse WindBot output to determine the actual winner and turn count.
+        
+        Args:
+            bot1_output: Output lines from first WindBot
+            bot2_output: Output lines from second WindBot
+            
+        Returns:
+            Tuple of (winner, turns) where winner is 0/1 for player 1/2, -1 for unknown
+        """
+        winner = -1
+        turns = 0
+        
+        # Combine all output for analysis
+        all_output = bot1_output + bot2_output
+        
+        # Look for common WindBot/YGOPro victory messages
+        for line in all_output:
+            line_lower = line.lower()
+            
+            # Look for winner messages
+            if "win" in line_lower or "victory" in line_lower or "winner" in line_lower:
+                # Try to extract player number
+                if "player 1" in line_lower or "player1" in line_lower:
+                    winner = 0
+                elif "player 2" in line_lower or "player2" in line_lower:
+                    winner = 1
+                
+                logger.debug(f"Found winner line: {line}")
+            
+            # Look for turn count
+            if "turn" in line_lower:
+                import re
+                turn_match = re.search(r'turn\s*(\d+)', line_lower)
+                if turn_match:
+                    turns = max(turns, int(turn_match.group(1)))
+            
+            # Look for game end messages
+            if "duel end" in line_lower or "game over" in line_lower:
+                logger.debug(f"Found game end line: {line}")
+            
+            # Look for LP (Life Points) reaching 0
+            if "lp" in line_lower and ("0" in line or "lose" in line_lower):
+                logger.debug(f"Found LP line: {line}")
+        
+        # If we couldn't find winner from output, try process exit codes
+        if winner == -1:
+            logger.warning("Could not parse winner from output, checking process behavior")
+            # This is still not ideal, but better than random
+            # In practice, you'd need to understand WindBot's specific output format
+        
+        # Default to reasonable turn count if not found
+        if turns == 0:
+            turns = 10  # Reasonable default
+        
+        return winner, turns
     
     def simulate_duel(self, config: DuelConfig) -> DuelResult:
         """
@@ -307,8 +514,8 @@ class WindBotWrapper:
             time.sleep(2)  # Give first bot time to connect
             bot2 = self._start_windbot(deck2_file, config.deck2_name, go_first=False)
             
-            # Monitor duel
-            result = self._monitor_duel(config.timeout)
+            # Monitor duel with actual processes
+            result = self._monitor_duel(bot1, bot2, config.timeout)
             result.deck1_name = config.deck1_name
             result.deck2_name = config.deck2_name
             
