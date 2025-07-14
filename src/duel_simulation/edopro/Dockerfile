@@ -1,29 +1,30 @@
 FROM ubuntu:22.04
 
-# Install system dependencies
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    git cmake make g++ wget unzip \
-    libevent-dev libsqlite3-dev liblua5.3-dev \
-    zlib1g-dev libboost-all-dev \
-    && rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Create a non-root user
-RUN useradd -ms /bin/bash edopro
-USER edopro
-WORKDIR /home/edopro
+RUN apt-get update && apt-get install -qq -y \
+    build-essential git cmake wget unzip \
+    libevent-dev libcurl4-openssl-dev libssl-dev \
+    libboost-all-dev libsqlite3-dev libfreetype6-dev \
+    libirrlicht-dev libfmt-dev zlib1g-dev ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-# Clone the EDOPro repo
-RUN git clone https://github.com/ProjectIgnis/edopro.git
+# Install premake5
+RUN wget https://github.com/premake/premake-core/releases/download/v5.0.0-alpha15/premake-5.0.0-alpha15-linux.tar.gz \
+ && tar -xzf premake-5.0.0-alpha15-linux.tar.gz \
+ && mv premake5 /usr/local/bin/ \
+ && rm premake-5.0.0-alpha15-linux.tar.gz
 
-# Build EDOPro and ocgcore together from the correct folder
-WORKDIR /home/edopro/edopro
-RUN mkdir build && cd build && cmake .. && make -j
+WORKDIR /edopro
+RUN git clone --recursive https://github.com/edo9300/edopro.git
 
-WORKDIR /home/edopro/edopro/build
+# Retrieve patches
+RUN git clone --depth 1 https://github.com/crispy-chiken/YugiohAi.git /yugioh_ai
 
-# Expose port if needed
-EXPOSE 7911
+WORKDIR /edopro/edopro
+# Apply patches before build
+RUN cp -r /yugioh_ai/edopro_changes/* ./
 
-# Start the app (override in `docker run` if desired)
-CMD ["./ygopro"]
+# Build headless with patched automation support
+RUN premake5 gmake2 --vcpkg-root=. \
+ && make -C build -j$(nproc) config=debug_x64 lua clzma ocgcore
