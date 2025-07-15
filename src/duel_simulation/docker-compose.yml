@@ -14,26 +14,28 @@ services:
       - "49382:49382"
       - "43632:43632"
     volumes:
-      - ../decks:/multirole/decks
+      - ../../decks/known:/multirole/decks
       - ./replays:/multirole/replays
     networks:
       - duelnet
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 7922"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   windbot_a:
     build:
       context: ./windbot
     depends_on:
-      - multirole
+      multirole:
+        condition: service_healthy
     volumes:
-      - ../decks:/decks
-    command: [
-      "mono", "/windbot/WindBot.exe",
-      "ServerMode=false",
-      "Host=172.20.0.2",
-      "Port=7922",
-      "Deck=decks/known/2021 goat format deck.ydk"
-    ]
+      - ../../decks/known:/windbot-source/Decks
+    environment:
+      DECK: "2021_goat_format_deck"
     networks:
       - duelnet
 
@@ -41,16 +43,12 @@ services:
     build:
       context: ./windbot
     depends_on:
-      - multirole
+      multirole:
+        condition: service_healthy
     volumes:
-      - ./decks:/decks
-    command: [
-      "mono", "/windbot/WindBot.exe",
-      "ServerMode=false",
-      "Host=172.20.0.2",
-      "Port=7922",
-      "Deck=decks/known/2023 Dragunity.ydk"
-    ]
+      - ../../decks/known:/windbot-source/Decks
+    environment:
+      DECK: "2023_Dragunity"
     networks:
       - duelnet
 
