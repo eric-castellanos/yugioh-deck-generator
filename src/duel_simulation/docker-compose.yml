@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  multirole:
+    build:
+      context: ./multirole
+    image: multirole-server
+    container_name: multirole
+    ports:
+      - "7922:7922"
+      - "7911:7911"
+      - "34343:34343"
+      - "62672:62672"
+      - "49382:49382"
+      - "43632:43632"
+    volumes:
+      - ../decks:/multirole/decks
+      - ./replays:/multirole/replays
+    networks:
+      - duelnet
+    restart: unless-stopped
+
+  windbot_a:
+    build:
+      context: ./windbot
+    depends_on:
+      - multirole
+    volumes:
+      - ../decks:/decks
+    command: [
+      "mono", "/windbot/WindBot.exe",
+      "ServerMode=false",
+      "Host=172.20.0.2",
+      "Port=7922",
+      "Deck=decks/known/2021 goat format deck.ydk"
+    ]
+    networks:
+      - duelnet
+
+  windbot_b:
+    build:
+      context: ./windbot
+    depends_on:
+      - multirole
+    volumes:
+      - ./decks:/decks
+    command: [
+      "mono", "/windbot/WindBot.exe",
+      "ServerMode=false",
+      "Host=172.20.0.2",
+      "Port=7922",
+      "Deck=decks/known/2023 Dragunity.ydk"
+    ]
+    networks:
+      - duelnet
+
+networks:
+  duelnet:
+    driver: bridge
