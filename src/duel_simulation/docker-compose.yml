@@ -1,57 +1,49 @@
 version: "3.9"
 
 services:
-  multirole:
-    build:
-      context: ./multirole
-    image: multirole-server
-    container_name: multirole
-    ports:
-      - "7922:7922"
-      - "7911:7911"
-      - "34343:34343"
-      - "62672:62672"
-      - "49382:49382"
-      - "43632:43632"
-    volumes:
-      - ../../decks/known:/multirole/decks
-      - ./replays:/multirole/replays
-    networks:
-      - duelnet
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z localhost 7922"]
-      interval: 3s
-      timeout: 3s
-      retries: 10
-      start_period: 5s
-
   windbot_a:
     build:
       context: ./windbot
     depends_on:
       multirole:
         condition: service_healthy
-    volumes:
-      - ../../decks/known:/windbot-source/Decks
     environment:
-      DECK: "2021_goat_format_deck"
+      DECK_FILE: "/windbot/Decks/2021_goat_format_deck.ydk"
+      SERVER_MODE: "true"
+      WIND_HOST: "multirole"
+      WIND_PORT: "7911"
+      BOT_NAME: "WindBot"
     networks:
       - duelnet
+    ports:
+      - "2399:2399"
 
   windbot_b:
     build:
       context: ./windbot
     depends_on:
-      multirole:
-        condition: service_healthy
-    volumes:
-      - ../../decks/known:/windbot-source/Decks
+      windbot_a:
+        condition: service_started
     environment:
-      DECK: "2023_Dragunity"
+      DECK_FILE: "/windbot/Decks/2023_Dragunity.ydk"
+      SERVER_MODE: "false"
+      WIND_HOST: "multirole"
+      WIND_PORT: "7911"
+      BOT_NAME: "OpponentBot"
+    networks:
+      - duelnet
+
+  trigger_duel:
+    image: curlimages/curl:latest
+    depends_on:
+      windbot_a:
+        condition: service_started
+    entrypoint: >
+      sh -c "sleep 5 && curl 'http://windbot_a:2399/?name=2021_goat_format_deck&host=127.0.0.1&port=7911'"
     networks:
       - duelnet
 
 networks:
   duelnet:
     driver: bridge
+
