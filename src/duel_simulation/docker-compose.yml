@@ -1,24 +1,43 @@
 version: '3.8'
 
 services:
-  edopro:
-    image: edopro-assets
-    container_name: edopro
+  ygopro-server:
+    build:
+      context: ./ygopro
+    container_name: ygopro-server
     ports:
-      - "7911:7911"  # EDOPro listens on this port
+      - "7911:7911"
     networks:
       - yugioh-net
-    command: >
-      sh -c "sleep 3 && xvfb-run -a ./EDOPro -p 7911 -i-want-to-be-admin -l duel.log"
+    command:
+      - bash
+      - -exc
+      - |
+        echo "Launching Xvfb on :99";
+        Xvfb :99 -screen 0 640x480x24 &
+        export DISPLAY=:99
+        echo "Starting YGOPro on DISPLAY=$DISPLAY";
+        ./bin/release/YGOPro \
+          -n HostBot \
+          -p 7911 \
+          -k \
+          -c
+ 
+    # healthcheck:
+    #   test: ["CMD-SHELL", "nc -z localhost 7911 || exit 1"]
+    #   interval: 5s
+    #   timeout: 5s
+    #   retries: 10
 
   windbot-1:
-    image: windbot
+    build:
+      context: ./windbot
     container_name: windbot-1
-    depends_on:
-      - edopro
+    # depends_on:
+    #   ygopro-server:
+    #     condition: service_healthy
     environment:
-      SERVER_MODE: "false"
-      WIND_HOST: edopro
+      WIND_HOST: ygopro-server
       WIND_PORT: 7911
       DECK_FILE: "/windbot/Decks/a.ydk"
       BOT_NAME: "AI_1"
@@ -34,13 +53,14 @@ services:
       - yugioh-net
 
   windbot-2:
-    image: windbot
+    build:
+      context: ./windbot
     container_name: windbot-2
-    depends_on:
-      - edopro
+    # depends_on:
+    #   ygopro-server:
+    #     condition: service_healthy
     environment:
-      SERVER_MODE: "false"
-      WIND_HOST: edopro
+      WIND_HOST: ygopro-server
       WIND_PORT: 7911
       DECK_FILE: "/windbot/Decks/b.ydk"
       BOT_NAME: "AI_2"
@@ -58,5 +78,6 @@ services:
 networks:
   yugioh-net:
     driver: bridge
+
 
 
