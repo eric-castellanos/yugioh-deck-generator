@@ -1,23 +1,41 @@
 #!/bin/bash
 
-# Resolve WIND_HOST to IP if it's not already an IP address
-if [[ "$WIND_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  HOST="$WIND_HOST"
-else
-  HOST=$(getent hosts "${WIND_HOST:-multirole}" | awk '{ print $1 }')
-fi
-
 PORT=${WIND_PORT:-7922}
 DECK_FILE=${DECK_FILE}
 SERVER_MODE=${SERVER_MODE:-false}
+NAME=${BOT_NAME:-WindBot}
+EXPORT_PATH=${EXPORT_PATH:-/GameData}
+HAND=${HAND:-2}
+IS_TRAINING=${IS_TRAINING:-true}
+SHOULD_UPDATE=${SHOULD_UPDATE:-true}
+SHOULD_RECORD=${SHOULD_RECORD:-false}
+IS_MCTS=${IS_MCTS:-false}
 
-echo "Connecting to host: $HOST, port: $PORT"
-echo "Using Deck: $DECK_FILE"
-echo "ServerMode: $SERVER_MODE"
-
-exec mono /windbot/WindBot.exe \
-  ServerMode=$SERVER_MODE \
-  Host=$HOST \
-  Port=$PORT \
-  DeckFile=$DECK_FILE
+if [ "$SERVER_MODE" = "true" ]; then
+  echo "🟢 WindBot running in SERVER MODE on port $PORT"
+  exec mono /windbot/WindBot.exe \
+    ServerMode=true \
+    Port=$PORT \
+    DeckFile=$DECK_FILE \
+    ExportPath=$EXPORT_PATH \
+    Name=$NAME \
+    Hand=$HAND \
+    IsTraining=$IS_TRAINING \
+    ShouldUpdate=$SHOULD_UPDATE \
+    ShouldRecord=$SHOULD_RECORD \
+    IsMCTS=$IS_MCTS
+else
+  echo "🔵 WindBot running in CLIENT MODE, connecting to $WIND_HOST:$PORT"
+  exec mono /windbot/WindBot.exe \
+    Host=$WIND_HOST \
+    Port=$PORT \
+    DeckFile=$DECK_FILE \
+    ExportPath=$EXPORT_PATH \
+    Name=$NAME \
+    Hand=$HAND \
+    IsTraining=$IS_TRAINING \
+    ShouldUpdate=$SHOULD_UPDATE \
+    ShouldRecord=$SHOULD_RECORD \
+    IsMCTS=$IS_MCTS
+fi
 

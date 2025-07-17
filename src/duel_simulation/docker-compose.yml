@@ -1,49 +1,62 @@
-version: "3.9"
+version: '3.8'
 
 services:
-  windbot_a:
-    build:
-      context: ./windbot
-    depends_on:
-      multirole:
-        condition: service_healthy
-    environment:
-      DECK_FILE: "/windbot/Decks/2021_goat_format_deck.ydk"
-      SERVER_MODE: "true"
-      WIND_HOST: "multirole"
-      WIND_PORT: "7911"
-      BOT_NAME: "WindBot"
-    networks:
-      - duelnet
+  edopro:
+    image: edopro-assets
+    container_name: edopro
     ports:
-      - "2399:2399"
+      - "7911:7911"  # EDOPro listens on this port
+    networks:
+      - yugioh-net
+    command: >
+      sh -c "sleep 3 && xvfb-run -a ./EDOPro -p 7911 -i-want-to-be-admin -l duel.log"
 
-  windbot_b:
-    build:
-      context: ./windbot
+  windbot-1:
+    image: windbot
+    container_name: windbot-1
     depends_on:
-      windbot_a:
-        condition: service_started
+      - edopro
     environment:
-      DECK_FILE: "/windbot/Decks/2023_Dragunity.ydk"
       SERVER_MODE: "false"
-      WIND_HOST: "multirole"
-      WIND_PORT: "7911"
-      BOT_NAME: "OpponentBot"
+      WIND_HOST: edopro
+      WIND_PORT: 7911
+      DECK_FILE: "/windbot/Decks/a.ydk"
+      BOT_NAME: "AI_1"
+      EXPORT_PATH: "/GameData"
+      HAND: "2"
+      IS_TRAINING: "true"
+      SHOULD_UPDATE: "true"
+      SHOULD_RECORD: "false"
+      IS_MCTS: "true"
+    volumes:
+      - ./gamelogs/ai_1:/GameData
     networks:
-      - duelnet
+      - yugioh-net
 
-  trigger_duel:
-    image: curlimages/curl:latest
+  windbot-2:
+    image: windbot
+    container_name: windbot-2
     depends_on:
-      windbot_a:
-        condition: service_started
-    entrypoint: >
-      sh -c "sleep 5 && curl 'http://windbot_a:2399/?name=2021_goat_format_deck&host=127.0.0.1&port=7911'"
+      - edopro
+    environment:
+      SERVER_MODE: "false"
+      WIND_HOST: edopro
+      WIND_PORT: 7911
+      DECK_FILE: "/windbot/Decks/b.ydk"
+      BOT_NAME: "AI_2"
+      EXPORT_PATH: "/GameData"
+      HAND: "3"
+      IS_TRAINING: "true"
+      SHOULD_UPDATE: "true"
+      SHOULD_RECORD: "false"
+      IS_MCTS: "false"
+    volumes:
+      - ./gamelogs/ai_2:/GameData
     networks:
-      - duelnet
+      - yugioh-net
 
 networks:
-  duelnet:
+  yugioh-net:
     driver: bridge
+
 

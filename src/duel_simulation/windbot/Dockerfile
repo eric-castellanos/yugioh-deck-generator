@@ -26,10 +26,10 @@ RUN msbuild WindBot.csproj /p:Configuration=Release
 # Ensure target directory exists, then copy actual WindBot.exe from correct path
 RUN mkdir -p /windbot && \
     mkdir -p /windbot/Decks && \
+    mkdir -p /windbot/Executors && \
     cp /windbot-source/out/WindBot/obj/x86/Release/WindBot.exe /windbot/WindBot.exe && \
     cp /windbot-source/ExecutorBase/obj/Release/ExecutorBase.dll /windbot/ExecutorBase.dll && \
-    cp -r /windbot-source/Dialogs /windbot/Dialogs && \
-    mkdir -p /windbot/Executors
+    cp -r /windbot-source/Dialogs /windbot/Dialogs
 
 COPY decks/known /windbot/Decks
 
@@ -43,6 +43,8 @@ EXPOSE 2399
 # Copy startup script
 COPY run-windbot.sh /run-windbot.sh
 RUN chmod +x /run-windbot.sh
+
+RUN mkdir -p /windbot/Executors
 
 # Use script as entrypoint
 ENTRYPOINT ["/run-windbot.sh"]
