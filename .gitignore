@@ -42,7 +42,7 @@ __pycache__/
 /mlruns/*
 
 # Decks
-/decks/*
+#/decks/*
 
 # Applications
 *Applications/*
