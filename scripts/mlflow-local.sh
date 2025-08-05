@@ -2,8 +2,6 @@
 
 # MLflow Local Development Setup Script
 
-set -e
-
 echo "🚀 Setting up MLflow Local Development Environment"
 echo "=================================================="
 
@@ -143,7 +141,6 @@ EOF
     
     echo "❌ MLflow server failed to start properly"
     docker-compose -f docker-compose.local-mlflow.yml logs mlflow-local
-    exit 1
 }
 
 # Function to start offline MLflow (no AWS dependencies)
