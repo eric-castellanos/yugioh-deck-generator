@@ -38,10 +38,10 @@ logger = logging.getLogger(__name__)
 
 # Weights for composite score calculation
 WEIGHTS = {
-    'cluster_entropy': 0.35,        # Higher entropy = more diverse clusters
-    'cluster_distance': 0.25,       # Higher distance = more surprising combinations
-    'rarity': 0.30,                 # Higher rarity = more novel combinations
-    'noise_penalty': 0.10           # Higher noise percentage = less cohesive deck
+    'cluster_entropy': 0.45,        # Higher entropy = more diverse clusters
+    'cluster_distance': 0.30,       # Higher distance = more surprising combinations
+    'rarity': 0.20,                 # Higher rarity = more novel combinations
+    'noise_penalty': 0.05           # Higher noise percentage = less cohesive deck
 }
 
 def normalize_metric(value: float, min_val: float, max_val: float) -> float:
@@ -132,8 +132,8 @@ def calculate_composite_score(
     return result
 
 def generate_decks(
-    total_decks: int = 1000, 
-    novel_ratio: float = 0.7,
+    total_decks: int = 10000, 
+    novel_ratio: float = 0.65,
     meta_archetypes: Optional[List[str]] = None,
     log_individual_decks: bool = False  # New parameter to control individual deck logging
 ) -> pl.DataFrame:
@@ -273,16 +273,35 @@ def generate_decks(
         # First pass to generate all decks and calculate min/max values for normalization
         pbar = tqdm(total=total_decks, desc="Generating decks")
         
-        # Generate novel decks
-        for i in range(num_novel):
+        # Create output directory for deck files
+        deck_output_dir = Path("decks/generated")
+        deck_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate all decks in a single loop
+        for i in range(total_decks):
             try:
-                deck_id = f"novel_{i+1}"
+                deck_id = f"deck_{i:03d}"
                 
-                # Generate a novel deck
-                main_deck, extra_deck, metadata = generator.generate_deck(
-                    mode="novel", 
-                    use_mlflow=False  # We'll log manually below
-                )
+                # Determine generation mode based on novel ratio
+                if i < num_novel:
+                    generation_mode = "novel"
+                    target_archetype = None
+                    
+                    # Generate a novel deck
+                    main_deck, extra_deck, metadata = generator.generate_deck(
+                        mode="novel", 
+                        use_mlflow=False  # We'll log manually below
+                    )
+                else:
+                    generation_mode = "meta_aware"
+                    target_archetype = random.choice(meta_archetypes)
+                    
+                    # Generate a meta-aware deck
+                    main_deck, extra_deck, metadata = generator.generate_deck(
+                        mode="meta_aware", 
+                        target_archetype=target_archetype,
+                        use_mlflow=False  # We'll log manually below
+                    )
                 
                 # Extract metrics
                 entropy = metadata.cluster_entropy
@@ -299,6 +318,18 @@ def generate_decks(
                 min_max_values['rarity'][1] = max(min_max_values['rarity'][1], rarity)
                 min_max_values['noise'][0] = min(min_max_values['noise'][0], noise_pct)
                 min_max_values['noise'][1] = max(min_max_values['noise'][1], noise_pct)
+                
+                # Write deck file to disk
+                deck_file_path = deck_output_dir / f"{deck_id}.ydk"
+                with open(deck_file_path, 'w') as f:
+                    f.write("#created by yugioh-deck-generator\n")
+                    f.write("#main\n")
+                    for card in main_deck:
+                        f.write(f"{card.get('id', '')}\n")
+                    f.write("#extra\n")
+                    for card in extra_deck:
+                        f.write(f"{card.get('id', '')}\n")
+                    f.write("!side\n")
                 
                 # Log this deck as an artifact if enabled
                 if log_individual_decks:
@@ -313,9 +344,9 @@ def generate_decks(
                         logger.warning(f"Failed to log deck artifacts for {deck_id}: {log_err}")
                 
                 # Store deck data
-                all_decks_data.append({
+                deck_data = {
                     'deck_id': deck_id,
-                    'generation_mode': 'novel',
+                    'generation_mode': generation_mode,
                     'main_deck_size': len(main_deck),
                     'extra_deck_size': len(extra_deck),
                     'monster_count': metadata.monster_count,
@@ -336,7 +367,13 @@ def generate_decks(
                     'main_deck': main_deck,  # Store the full list of main deck cards
                     'extra_deck': extra_deck,  # Store the full list of extra deck cards
                     # Composite score will be calculated in second pass
-                })
+                }
+                
+                # Add target_archetype for meta-aware decks
+                if generation_mode == "meta_aware":
+                    deck_data['target_archetype'] = target_archetype
+                
+                all_decks_data.append(deck_data)
                 
                 successful_decks += 1
                 pbar.update(1)
@@ -348,84 +385,7 @@ def generate_decks(
                     logger.info(f"Generated {i}/{total_decks} decks ({rate:.1f} decks/sec)")
                 
             except Exception as e:
-                logger.warning(f"Failed to generate novel deck {i+1}: {e}")
-                pbar.update(1)
-        
-        # Generate meta-aware decks
-        for i in range(num_meta):
-            try:
-                deck_id = f"meta_{i+1}"
-                
-                # Choose a random archetype from the list
-                target_archetype = random.choice(meta_archetypes)
-                
-                # Generate a meta-aware deck
-                main_deck, extra_deck, metadata = generator.generate_deck(
-                    mode="meta_aware", 
-                    target_archetype=target_archetype,
-                    use_mlflow=False  # We'll log manually below
-                )
-                
-                # Extract metrics
-                entropy = metadata.cluster_entropy
-                distance = metadata.intra_deck_cluster_distance
-                rarity = metadata.cluster_co_occurrence_rarity
-                noise_pct = metadata.noise_card_percentage
-                
-                # Update min/max values
-                min_max_values['entropy'][0] = min(min_max_values['entropy'][0], entropy)
-                min_max_values['entropy'][1] = max(min_max_values['entropy'][1], entropy)
-                min_max_values['distance'][0] = min(min_max_values['distance'][0], distance)
-                min_max_values['distance'][1] = max(min_max_values['distance'][1], distance)
-                min_max_values['rarity'][0] = min(min_max_values['rarity'][0], rarity)
-                min_max_values['rarity'][1] = max(min_max_values['rarity'][1], rarity)
-                min_max_values['noise'][0] = min(min_max_values['noise'][0], noise_pct)
-                min_max_values['noise'][1] = max(min_max_values['noise'][1], noise_pct)
-                
-                # Log this deck as an artifact if enabled
-                if log_individual_decks:
-                    try:
-                        log_deck_artifacts(
-                            main_deck=main_deck,
-                            extra_deck=extra_deck,
-                            metadata=metadata,
-                            prefix=f"deck_{deck_id}_{target_archetype}"
-                        )
-                    except Exception as log_err:
-                        logger.warning(f"Failed to log deck artifacts for {deck_id} ({target_archetype}): {log_err}")
-                
-                # Store deck data
-                all_decks_data.append({
-                    'deck_id': deck_id,
-                    'generation_mode': 'meta_aware',
-                    'target_archetype': target_archetype,
-                    'main_deck_size': len(main_deck),
-                    'extra_deck_size': len(extra_deck),
-                    'monster_count': metadata.monster_count,
-                    'spell_count': metadata.spell_count,
-                    'trap_count': metadata.trap_count,
-                    'monster_ratio': metadata.monster_count / len(main_deck) if main_deck else 0,
-                    'spell_ratio': metadata.spell_count / len(main_deck) if main_deck else 0,
-                    'trap_ratio': metadata.trap_count / len(main_deck) if main_deck else 0,
-                    'dominant_archetype': metadata.dominant_archetype,
-                    'cluster_entropy': entropy,
-                    'intra_deck_cluster_distance': distance,
-                    'cluster_co_occurrence_rarity': rarity,
-                    'noise_card_percentage': noise_pct,
-                    'raw_entropy': entropy,
-                    'raw_distance': distance,
-                    'raw_rarity': rarity,
-                    'raw_noise': noise_pct,
-                    'main_deck': main_deck,  # Store the full list of main deck cards
-                    'extra_deck': extra_deck,  # Store the full list of extra deck cards
-                    # Composite score will be calculated in second pass
-                })
-                
-                successful_decks += 1
-                pbar.update(1)
-                
-            except Exception as e:
-                logger.warning(f"Failed to generate meta-aware deck for {target_archetype}: {e}")
+                logger.warning(f"Failed to generate deck {i+1}: {e}")
                 pbar.update(1)
         
         pbar.close()
@@ -545,7 +505,7 @@ def convert_numpy_to_list_in_df(df: pd.DataFrame) -> pd.DataFrame:
 def main():
     """Main function to execute the generation process."""
     # Define generation parameters
-    num_decks = 5000
+    num_decks = 10000
     novel_ratio = 0.65
     
     # Generate decks and get results as polars DataFrame
