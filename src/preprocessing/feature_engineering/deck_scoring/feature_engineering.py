@@ -92,6 +92,75 @@ def load_deck_data_from_s3(
             
     return df
 
+def load_battle_results_from_s3(
+    bucket: str = 'yugioh-data',
+    key: str = 'deck_scoring/training_data/deck_battle_results.csv'
+) -> pd.DataFrame:
+    """
+    Load deck battle results from S3 bucket
+    
+    Parameters:
+    -----------
+    bucket : str
+        S3 bucket name
+    key : str
+        Object key (path to file in S3)
+    
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame containing the battle results data
+    """
+    logger.info(f"Loading battle results from s3://{bucket}/{key}")
+    
+    # Read data from S3
+    df = read_csv_from_s3(bucket=bucket, key=key)
+    
+    return df
+
+def merge_deck_data_with_battle_results(
+    deck_df: pd.DataFrame,
+    battle_results_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Perform right join between deck data and battle results on deck_id,
+    then filter out rows where win_rate is "FAILED"
+    
+    Parameters:
+    -----------
+    deck_df : pd.DataFrame
+        DataFrame with deck composition and features
+    battle_results_df : pd.DataFrame
+        DataFrame with battle results including win_rate
+        
+    Returns:
+    --------
+    pd.DataFrame
+        Merged DataFrame with failed battles filtered out
+    """
+    logger.info(f"Merging deck data ({len(deck_df)} rows) with battle results ({len(battle_results_df)} rows)")
+    
+    # Perform right join on deck_id
+    merged_df = pd.merge(
+        deck_df, 
+        battle_results_df, 
+        on='deck_id', 
+        how='right'
+    )
+    
+    logger.info(f"After merge: {len(merged_df)} rows")
+    
+    # Filter out rows where win_rate is "FAILED"
+    initial_count = len(merged_df)
+    merged_df = merged_df[merged_df['win_rate'] != 'FAILED']
+    final_count = len(merged_df)
+    
+    failed_count = initial_count - final_count
+    logger.info(f"Filtered out {failed_count} rows with win_rate = 'FAILED'")
+    logger.info(f"Final dataset: {final_count} rows")
+    
+    return merged_df
+
 def has_tuner(main_deck: List[Dict[str, Any]]) -> bool:
     return any('Tuner' in card.get('type', '') for card in main_deck)
 
@@ -305,7 +374,12 @@ def count_strategy_keywords(main_deck: list[dict]) -> dict:
     }
 
 if __name__ == "__main__":
+    # Load deck data and battle results
     deck_df = load_deck_data_from_s3()
+    battle_results_df = load_battle_results_from_s3()
+    
+    # Merge datasets and filter out failed battles
+    deck_df = merge_deck_data_with_battle_results(deck_df, battle_results_df)
 
     # Summoning Mechanic Features
     deck_df['has_tuner'] = deck_df['main_deck'].apply(has_tuner)
