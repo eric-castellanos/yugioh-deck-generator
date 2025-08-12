@@ -19,15 +19,15 @@ mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 # Feature type to S3 key mapping
 FEATURE_CONFIGS = {
     "tfidf": {
-        "s3_key": "processed/feature_engineered/2025-06/feature_engineered_tfidf.parquet",
+        "s3_key": "processed/feature_engineered/clustering/2025-06/feature_engineered_tfidf.parquet",
         "description": "TF-IDF features only from card descriptions"
     },
     "embeddings": {
-        "s3_key": "processed/feature_engineered/2025-06/feature_engineered_embeddings.parquet", 
+        "s3_key": "processed/feature_engineered/clustering/2025-06/feature_engineered_embeddings.parquet", 
         "description": "Word embedding features only from card descriptions"
     },
     "combined": {
-        "s3_key": "processed/feature_engineered/2025-06/feature_engineered_combined.parquet",
+        "s3_key": "processed/feature_engineered/clustering/2025-06/feature_engineered_combined.parquet",
         "description": "Combined TF-IDF and word embedding features from card descriptions"
     }
 }

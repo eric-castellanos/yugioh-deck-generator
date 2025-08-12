@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import root_mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.decomposition import TruncatedSVD, PCA
 from sklearn.preprocessing import StandardScaler
 import mlflow
@@ -19,14 +19,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 S3_BUCKET = "yugioh-data"
-S3_KEY = "processed/feature_engineered/deck_scoring/2025-06/feature_engineered.parquet"
+S3_KEY = "processed/feature_engineered/deck_scoring/2025-08/feature_engineered.parquet"
 
 def load_data(bucket: str, key: str) -> pd.DataFrame:
     logger.info("Loading data from S3")
     return read_parquet_from_s3(bucket, key).to_pandas()
 
-def preprocess_data(deck_df: pd.DataFrame, use_pca: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[str]]:
-    logger.info(f"Preprocessing data using {'PCA' if use_pca else 'TruncatedSVD'}")
+def preprocess_data(deck_df: pd.DataFrame, target_col: str = 'composite_score', use_pca: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[str]]:
+    logger.info(f"Preprocessing data using {'PCA' if use_pca else 'TruncatedSVD'} with target variable: {target_col}")
 
     embedding_df = pd.DataFrame(
         deck_df['main_deck_mean_embedding'].to_list(),
@@ -36,16 +36,34 @@ def preprocess_data(deck_df: pd.DataFrame, use_pca: bool = False) -> Tuple[np.nd
 
     embedding_cols = [col for col in deck_df.columns if col.startswith("embedding_")]
     feature_cols = [
+        # Basic deck features
         'has_tuner', 'num_tuners', 'has_same_level_monsters', 'max_same_level_count',
         'avg_monster_level', 'has_pendulum_monsters', 'has_synchro_monsters',
         'has_xyz_monsters', 'has_link_monsters', 'max_copies_per_card',
-        'avg_copies_per_monster', 'num_unique_monsters', 'main_deck_mean_tfidf',
-        'num_banish', 'num_graveyard', 'num_draw', 'num_search',
+        'avg_copies_per_monster', 'num_unique_monsters',
+        # Advanced Mechanic Features
+        'tuner_count', 'non_tuner_count', 'can_synchro', 'matched_synchro_levels',
+        'xyz_level_mode', 'xyz_level_mode_count', 'can_xyz', 'p_two_of_mode_lvl_in_7',
+        'fusion_enabler_count', 'can_fusion', 'low_level_count', 'monster_count',
+        'max_link_rating_in_extra', 'can_link', 'pendulum_count', 'pendulum_span_max',
+        'pendulum_inrange_monsters', 'can_pendulum',
+        # NLP and Strategy Features
+        'main_deck_mean_tfidf', 'num_banish', 'num_graveyard', 'num_draw', 'num_search',
         'num_special_summon', 'num_negate', 'num_destroy', 'num_shuffle'
+        # Cluster related features
+        'cluster_entropy', 'intra_deck_cluster_distance', 'cluster_co_occurrence_rarity',
+        'noise_card_percentage'
     ] + embedding_cols
 
+    # Filter out features that don't exist in the dataframe
+    available_features = [col for col in feature_cols if col in deck_df.columns]
+    if len(available_features) != len(feature_cols):
+        missing_features = set(feature_cols) - set(available_features)
+        logger.warning(f"Missing features: {missing_features}")
+        feature_cols = available_features
+
     X = deck_df[feature_cols]
-    y = deck_df['composite_score']
+    y = deck_df[target_col]
     test_size = 0.2
     X_train_raw, X_test_raw, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
 
@@ -79,6 +97,7 @@ def preprocess_data(deck_df: pd.DataFrame, use_pca: bool = False) -> Tuple[np.nd
     final_feature_names = dense_feature_names + embedding_feature_names
 
     log_params({
+        "target_variable": target_col,
         "embedding_reduction_method": "PCA" if use_pca else "TruncatedSVD",
         "embedding_components": embedding_n_components,
         "train_test_split_ratio": 1 - test_size,
@@ -89,29 +108,36 @@ def preprocess_data(deck_df: pd.DataFrame, use_pca: bool = False) -> Tuple[np.nd
 
     return X_train_final, X_test_final, y_train, y_test, final_feature_names
 
-def log_deck_scoring_prediction_tags(version: str = "v1.0", method: str = "TruncatedSVD") -> None:
+def log_deck_scoring_prediction_tags(target_col: str, version: str = "v1.0", method: str = "TruncatedSVD") -> None:
     log_tags({
         "model_type": "regression",
         "algorithm": "xgboost",
         "dataset": "yugioh_decks",
         "purpose": "deck_scoring_prediction",
+        "target_variable": target_col,
         "data_source": f"s3://{S3_BUCKET}/{S3_KEY}",
         "stage": "development",
         "version": version,
         "dimensionality_reduction": method
     })
 
-def run_pipeline(use_pca: bool = False) -> None:
+def run_pipeline(target_col: str = 'composite_score', use_pca: bool = False) -> None:
     df = load_data(S3_BUCKET, S3_KEY)
+    
+    # Validate target column exists
+    if target_col not in df.columns:
+        raise ValueError(f"Target column '{target_col}' not found in dataset. Available columns: {df.columns.tolist()}")
+    
+    # import pdb; pdb.set_trace()
     method = "PCA" if use_pca else "TruncatedSVD"
-    experiment_name = "deck_scoring_model"
+    experiment_name = f"deck_scoring_model_{target_col}"
     experiment_id = setup_experiment(experiment_name)
 
     with mlflow.start_run(experiment_id=experiment_id) as run:
-        logger.info(f"MLflow run started: {run.info.run_id} [{method}]")
-        log_deck_scoring_prediction_tags(method=method)
+        logger.info(f"MLflow run started: {run.info.run_id} [{method}] Target: {target_col}")
+        log_deck_scoring_prediction_tags(target_col=target_col, method=method)
 
-        X_train, X_test, y_train, y_test, feature_names = preprocess_data(df, use_pca=use_pca)
+        X_train, X_test, y_train, y_test, feature_names = preprocess_data(df, target_col=target_col, use_pca=use_pca)
 
         # Split off validation from training
         X_train_final, X_val, y_train_final, y_val = train_test_split(
@@ -129,12 +155,14 @@ def run_pipeline(use_pca: bool = False) -> None:
         logger.info("Evaluating tuned model on test set")
         y_pred = best_model.predict(X_test)
         log_metrics({
-            "test_rmse": root_mean_squared_error(y_test, y_pred),
+            "test_rmse": mean_squared_error(y_test, y_pred),
             "test_r2": r2_score(y_test, y_pred)
         })
 
         logger.info(f"Run completed: {run.info.run_id}")
 
 if __name__ == "__main__":
-    #run_pipeline(use_pca=False)  # TruncatedSVD
-    run_pipeline(use_pca=True)   # PCA
+    # Examples of running with different target variables
+    # run_pipeline(target_col='composite_score', use_pca=False)    # Original composite score
+    # run_pipeline(target_col='win_rate', use_pca=False)          # Raw win rate  
+    run_pipeline(target_col='adjusted_win_rate', use_pca=True)   # Bayesian adjusted win rate

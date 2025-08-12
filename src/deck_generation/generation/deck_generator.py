@@ -3,6 +3,12 @@ Simple Yu-Gi-Oh! Deck Generator
 
 A streamlined deck generation system that creates decks from clustered card data.
 Supports both meta-aware and novel deck generation modes.
+
+Enhancements:
+- Optional HARD reachability for Synchro/XYZ/Link/Pendulum with graceful fallback.
+- Smarter trimming back to 40 after auto-fixes (keeps enablers).
+- Extra reachability metrics for MLflow (synchro coverage, xyz pairs, link material depth, pendulum span).
+- Cleaner extra-deck diversity and dedupe.
 """
 
 from typing import Dict, List, Optional, Tuple, Any, Set
@@ -16,7 +22,7 @@ from enum import Enum
 # MLflow imports
 import mlflow
 from src.utils.mlflow.mlflow_utils import (
-    setup_deck_generation_experiment,
+    setup_experiment,
     log_deck_generation_tags,
     log_deck_generation_params,
     log_deck_metrics,
@@ -43,6 +49,10 @@ from src.utils.deck_scoring.deck_scoring_utils import (
 logger = logging.getLogger(__name__)
 
 
+# =========================
+# Types & small helpers
+# =========================
+
 class CardType(Enum):
     """Yu-Gi-Oh! card types."""
     MONSTER = "Monster"
@@ -66,10 +76,19 @@ class CardType(Enum):
         return [cls.FUSION, cls.SYNCHRO, cls.XYZ, cls.LINK]
 
 
+def is_monster(card: Dict) -> bool:
+    return card.get('type') and 'Monster' in card.get('type')
+
+def is_spell(card: Dict) -> bool:
+    return card.get('type') and 'Spell' in card.get('type')
+
+def is_trap(card: Dict) -> bool:
+    return card.get('type') and 'Trap' in card.get('type')
+
 # Card constraint utility functions
 def is_tuner(card: Dict) -> bool:
     """Check if a card is a Tuner monster."""
-    return card.get('type') and 'Monster' in card.get('type') and card.get('desc') and 'Tuner' in card.get('desc')
+    return card.get('type') and 'Monster' in card.get('type') and 'Tuner' in card.get('type')
 
 def is_pendulum(card: Dict) -> bool:
     """Check if a card is a Pendulum monster."""
@@ -79,23 +98,31 @@ def get_monster_level(card: Dict) -> int:
     """Get monster level/rank/link value."""
     if card.get('type') and 'Monster' in card.get('type'):
         if 'Link' in card.get('type'):
-            return card.get('linkval', 0)
+            return int(card.get('linkval', 0) or 0)
         else:
-            return card.get('level', 0)
+            return int(card.get('level', 0) or 0)
     return 0
 
 def get_pendulum_scales(card: Dict) -> Tuple[int, int]:
     """Get pendulum scales for a card if it's a pendulum monster."""
     if is_pendulum(card):
         # Return left and right scales (typically found in lscale and rscale)
-        return card.get('lscale', 0), card.get('rscale', 0)
+        return int(card.get('lscale', 0) or 0), int(card.get('rscale', 0) or 0)
     return 0, 0
 
 def get_link_markers(card: Dict) -> List[str]:
     """Get link markers for a Link monster."""
     if card.get('type') and 'Link' in card.get('type'):
-        return card.get('linkmarkers', [])
+        return card.get('linkmarkers', []) or []
     return []
+
+def pick_random(seq: List[Any]) -> Optional[Any]:
+    return random.choice(seq) if seq else None
+
+
+# =========================
+# Deck metadata (with reachability metrics)
+# =========================
 
 class DeckMetadata:
     """Metadata and analysis info for a generated deck."""
@@ -122,15 +149,21 @@ class DeckMetadata:
         self.archetype_distribution = {}
         self.dominant_archetype = "Unknown"
         
+        # Summon reachability metrics
+        self.synchro_levels_reachable = 0
+        self.xyz_level_pairs = 0
+        self.link_material_depth = 0
+        self.pendulum_scale_span = 0
+        
         # Analyze the deck composition
         self._analyze_deck()
     
     def _analyze_deck(self):
         """Analyze deck composition and calculate metrics."""
         # Count card types
-        self.monster_count = sum(1 for card in self.main_deck if card.get('type') and 'Monster' in card.get('type'))
-        self.spell_count = sum(1 for card in self.main_deck if card.get('type') and 'Spell' in card.get('type'))
-        self.trap_count = sum(1 for card in self.main_deck if card.get('type') and 'Trap' in card.get('type'))
+        self.monster_count = sum(1 for card in self.main_deck if is_monster(card))
+        self.spell_count = sum(1 for card in self.main_deck if is_spell(card))
+        self.trap_count = sum(1 for card in self.main_deck if is_trap(card))
         self.total_main = len(self.main_deck)
         self.total_extra = len(self.extra_deck)
         
@@ -140,45 +173,37 @@ class DeckMetadata:
         self.xyz_count = sum(1 for card in self.extra_deck if card.get('type') and 'XYZ' in card.get('type'))
         self.link_count = sum(1 for card in self.extra_deck if card.get('type') and 'Link' in card.get('type'))
         
-        # Track copy distribution
+        # Copy distribution
         self.copy_distribution = self._calculate_copy_distribution()
         
-        # Track archetypes using the utility function
+        # Archetypes
         all_cards = self.main_deck + self.extra_deck
         self.archetype_distribution = get_archetype_distribution(all_cards)
         self.archetypes = dict(sorted(self.archetype_distribution.items(), key=lambda x: x[1], reverse=True)[:3])
         self.dominant_archetype = get_dominant_archetype(self.archetype_distribution)
         
-        # Check summoning mechanics supported
+        # Flags & ratios
         self.has_tuners = any(is_tuner(card) for card in self.main_deck)
         self.has_pendulums = any(is_pendulum(card) for card in self.main_deck)
         
-        # Calculate some derived metrics
         self.monster_ratio = self.monster_count / self.total_main if self.total_main > 0 else 0
         self.spell_ratio = self.spell_count / self.total_main if self.total_main > 0 else 0
         self.trap_ratio = self.trap_count / self.total_main if self.total_main > 0 else 0
         
-        # Calculate cluster-related metrics if clustered_cards is available
+        # Reachability metrics (cheap, static approximations)
+        self._compute_reachability_metrics()
+        
+        # Cluster-related metrics if available
         if self.clustered_cards:
-            # Create mapping from card name to cluster
             card_to_cluster = create_card_to_cluster_mapping(self.clustered_cards)
-            
-            # Get cluster distribution
             self.cluster_distribution = get_cluster_distribution(all_cards, card_to_cluster)
-            
-            # Calculate entropy
             self.cluster_entropy = calculate_cluster_entropy(self.cluster_distribution)
-            
-            # Calculate noise percentage (passing card_to_cluster to identify noise cards with label -1)
             self.noise_card_percentage = calculate_noise_card_percentage(self.main_deck, self.clustered_cards, card_to_cluster)
             
-            # Calculate cluster distance - generate embeddings from cluster IDs
-            # Create simple numeric embeddings for each cluster
+            # crude but stable cluster embeddings from ids
             cluster_embeddings = {}
             for i, cluster_id in enumerate(self.cluster_distribution.keys()):
-                # Convert each cluster_id to a simple vector position
-                # This ensures all clusters get a unique embedding
-                cluster_num = int(cluster_id) if cluster_id.isdigit() else hash(cluster_id) % 10000
+                cluster_num = int(cluster_id) if str(cluster_id).isdigit() else hash(cluster_id) % 10000
                 cluster_embeddings[cluster_id] = [
                     math.sin(cluster_num * 0.1),
                     math.cos(cluster_num * 0.1),
@@ -190,19 +215,15 @@ class DeckMetadata:
                 self.cluster_distribution, cluster_embeddings
             )
             
-            # Calculate rarity - generate a simple cooccurrence map based on cluster distribution
-            # This gives more variety in the rarity scores
+            # pseudo co-occurrence rarity (stable noise)
             global_cooccurrence = {}
             clusters = list(self.cluster_distribution.keys())
             for i, c1 in enumerate(clusters):
                 for j, c2 in enumerate(clusters):
                     if i != j:
-                        pair = (c1, c2)
-                        # Generate a pseudo-random cooccurrence value between 0.1 and 0.9
-                        # based on the cluster IDs
-                        c1_val = int(c1) if c1.isdigit() else hash(c1) % 10000
-                        c2_val = int(c2) if c2.isdigit() else hash(c2) % 10000
-                        global_cooccurrence[pair] = 0.1 + 0.8 * ((c1_val * c2_val) % 100) / 100
+                        c1_val = int(c1) if str(c1).isdigit() else hash(c1) % 10000
+                        c2_val = int(c2) if str(c2).isdigit() else hash(c2) % 10000
+                        global_cooccurrence[(c1, c2)] = 0.1 + 0.8 * ((c1_val * c2_val) % 100) / 100
             
             self.cluster_co_occurrence_rarity = calculate_cluster_cooccurrence_rarity(
                 self.cluster_distribution, global_cooccurrence
@@ -210,14 +231,11 @@ class DeckMetadata:
     
     def _calculate_copy_distribution(self):
         """Calculate the distribution of card copies in the deck."""
-        # Count occurrences of each card name
         name_counts = {}
         for card in self.main_deck:
             name = card.get('name', '')
             if name:
                 name_counts[name] = name_counts.get(name, 0) + 1
-        
-        # Count how many cards appear 1, 2, or 3 times
         counts = {'1_count': 0, '2_count': 0, '3_count': 0}
         for name, count in name_counts.items():
             if count == 1:
@@ -226,10 +244,40 @@ class DeckMetadata:
                 counts['2_count'] += 1
             elif count >= 3:
                 counts['3_count'] += 1
-        
         return counts
     
-    # _identify_archetypes method removed as we now use get_archetype_distribution from deck_scoring_utils
+    def _compute_reachability_metrics(self):
+        """Static features to help your NN understand 'how live' each mechanic is."""
+        monsters = [c for c in self.main_deck if is_monster(c)]
+        tuners = [c for c in monsters if is_tuner(c)]
+        non_tuners = [c for c in monsters if not is_tuner(c)]
+        tuner_lvls = [get_monster_level(c) for c in tuners if get_monster_level(c) > 0]
+        nt_lvls = [get_monster_level(c) for c in non_tuners if get_monster_level(c) > 0]
+        # Synchro coverage: count distinct achievable sums that appear in Extra
+        extra_syn_lvls = {get_monster_level(c) for c in self.extra_deck if c.get('type') and 'Synchro' in c.get('type')}
+        reachable = set()
+        for t in tuner_lvls:
+            for n in nt_lvls:
+                s = t + n
+                if s in extra_syn_lvls:
+                    reachable.add(s)
+        self.synchro_levels_reachable = len(reachable)
+        # XYZ: count levels with at least 2 copies that match some XYZ rank in Extra
+        level_counts = Counter([get_monster_level(c) for c in monsters if get_monster_level(c) > 0])
+        xyz_ranks = {get_monster_level(c) for c in self.extra_deck if c.get('type') and 'XYZ' in c.get('type')}
+        self.xyz_level_pairs = sum(1 for lvl, cnt in level_counts.items() if cnt >= 2 and lvl in xyz_ranks)
+        # Link: naive material depth proxy = min(total monsters // 2, highest link + 1)
+        highest_link = 0
+        for c in self.extra_deck:
+            if c.get('type') and 'Link' in c.get('type'):
+                highest_link = max(highest_link, get_monster_level(c))
+        self.link_material_depth = min(len(monsters) // 2, highest_link + 1) if highest_link > 0 else 0
+        # Pendulum scale span
+        scales = [get_pendulum_scales(c) for c in self.main_deck if is_pendulum(c)]
+        flat = [s for pair in scales for s in pair if s is not None]
+        self.pendulum_scale_span = (max(flat) - min(flat)) if flat else 0
+    
+    # _identify_archetypes removed; using get_archetype_distribution
     
     def get_metrics(self):
         """Get metrics for MLflow logging."""
@@ -255,7 +303,7 @@ class DeckMetadata:
             "has_tuners": 1 if self.has_tuners else 0,
             "has_pendulums": 1 if self.has_pendulums else 0,
             
-            # Add cluster-related metrics from deck_scoring_utils
+            # Cluster-related
             "cluster_entropy": self.cluster_entropy,
             "intra_deck_cluster_distance": self.intra_deck_cluster_distance,
             "cluster_co_occurrence_rarity": self.cluster_co_occurrence_rarity,
@@ -263,8 +311,13 @@ class DeckMetadata:
             "dominant_archetype": self.dominant_archetype,
             "cluster_count": len(self.cluster_distribution) if self.cluster_distribution else 0,
             "archetype_count": len(self.archetype_distribution) if self.archetype_distribution else 0,
+
+            # NEW: reachability
+            "synchro_levels_reachable": self.synchro_levels_reachable,
+            "xyz_level_pairs": self.xyz_level_pairs,
+            "link_material_depth": self.link_material_depth,
+            "pendulum_scale_span": self.pendulum_scale_span,
         }
-        
         return metrics
     
     def to_dict(self):
@@ -287,7 +340,7 @@ class DeckMetadata:
             "has_tuners": self.has_tuners,
             "has_pendulums": self.has_pendulums,
             
-            # Add cluster-related metrics
+            # Cluster-related
             "cluster_entropy": self.cluster_entropy,
             "intra_deck_cluster_distance": self.intra_deck_cluster_distance,
             "cluster_co_occurrence_rarity": self.cluster_co_occurrence_rarity,
@@ -295,7 +348,18 @@ class DeckMetadata:
             "cluster_distribution": self.cluster_distribution,
             "archetype_distribution": self.archetype_distribution,
             "dominant_archetype": self.dominant_archetype,
+
+            # Reachability
+            "synchro_levels_reachable": self.synchro_levels_reachable,
+            "xyz_level_pairs": self.xyz_level_pairs,
+            "link_material_depth": self.link_material_depth,
+            "pendulum_scale_span": self.pendulum_scale_span,
         }
+
+
+# =========================
+# Deck generator
+# =========================
 
 class DeckGenerator:
     """Yu-Gi-Oh! Deck Generator with game-based constraints."""
@@ -309,14 +373,39 @@ class DeckGenerator:
             cls._instance.initialized = False
         return cls._instance
     
-    def __init__(self, clustering_model=None, card_data=None, num_cards=40):
+    def __init__(self, clustering_model=None, card_data=None, num_cards=40,
+                 # NEW toggles: choose how strict to be
+                 hard_synchro: bool = True,
+                 hard_xyz: bool = True,
+                 hard_link: bool = True,
+                 hard_pendulum: bool = False,
+                 random_seed: Optional[int] = None):
         """Initialize the deck generator."""
-        # Ensure singleton pattern
-        if self.__class__._instance is not None and self.__class__._instance.initialized:
-            return
-        
+        # Always set essential attributes (even for singleton pattern)
         self.num_cards = num_cards
         self.extra_deck_size = 15
+
+        # Strictness toggles
+        self.hard_synchro = hard_synchro
+        self.hard_xyz = hard_xyz
+        self.hard_link = hard_link
+        self.hard_pendulum = hard_pendulum
+
+        # Random seed support (logged to MLflow)
+        self.random_seed = random_seed if random_seed is not None else random.randrange(10**9)
+        random.seed(self.random_seed)
+
+        # Ensure singleton pattern
+        if self.__class__._instance is not None and self.__class__._instance.initialized:
+            # Update essentials in existing instance
+            inst = self.__class__._instance
+            inst.num_cards = num_cards
+            inst.hard_synchro = hard_synchro
+            inst.hard_xyz = hard_xyz
+            inst.hard_link = hard_link
+            inst.hard_pendulum = hard_pendulum
+            inst.random_seed = self.random_seed
+            return
         
         # Target ratios with reasonable defaults
         self.target_monster_ratio = 0.6
@@ -379,7 +468,6 @@ class DeckGenerator:
             # Store in appropriate clusters
             if main_cards:
                 self.main_deck_clusters[cluster_id] = main_cards
-                
                 if monsters:
                     self.monster_clusters[cluster_id] = monsters
                 if spells:
@@ -390,81 +478,84 @@ class DeckGenerator:
             if extra_cards:
                 self.extra_deck_clusters[cluster_id] = extra_cards
 
+    # -----------------------------
+    # Core constraint application
+    # -----------------------------
     def apply_game_constraints(self, main_deck: List[Dict], extra_deck: List[Dict]) -> Tuple[List[Dict], List[Dict]]:
         """
         Apply Yu-Gi-Oh! game-based constraints to ensure realistic, playable decks.
-        
-        Args:
-            main_deck: The generated main deck
-            extra_deck: The generated extra deck
-            
-        Returns:
-            Tuple of (updated_main_deck, updated_extra_deck)
+        Enforces copy caps, adjusts copies, and (optionally) hard-enforces reachability
+        by adding enablers or pruning unreachable Extra cards.
         """
         logger.info("Applying Yu-Gi-Oh! game-based constraints to deck")
         
-        # 1. First, ensure no card exceeds 3 copies (core YGO rule)
+        # 1) Global 3-copy cap (before we juggle things)
         main_deck = apply_max_copies_constraint(main_deck)
         
-        # 2. Apply realistic monster copy distribution (most monsters as 2-3 copies) 
-        # Extract monsters, spells, and traps from main deck
-        monsters = [card for card in main_deck if card.get('type') and 'Monster' in card.get('type')]
-        spells = [card for card in main_deck if card.get('type') and 'Spell' in card.get('type')]
-        traps = [card for card in main_deck if card.get('type') and 'Trap' in card.get('type')]
+        # 2) Realistic copy distributions by type
+        monsters = [card for card in main_deck if is_monster(card)]
+        spells   = [card for card in main_deck if is_spell(card)]
+        traps    = [card for card in main_deck if is_trap(card)]
         
-        # Apply copy distribution to each card type
         optimized_deck = []
-        
-        # Optimize monsters (higher chance of 3-ofs)
         if len(monsters) >= 3:
-            optimized_monsters = apply_copy_distribution_to_monsters(monsters, deck_size=len(monsters))
-            optimized_deck.extend(optimized_monsters)
+            optimized_deck.extend(apply_copy_distribution_to_monsters(monsters, deck_size=len(monsters)))
         else:
             optimized_deck.extend(monsters)
-            
-        # Optimize spells and traps together (more variety in copy counts)
+        
         spells_traps = spells + traps
         if len(spells_traps) >= 3:
-            optimized_spells_traps = apply_copy_distribution_to_spells_traps(spells_traps)
-            optimized_deck.extend(optimized_spells_traps)
+            optimized_deck.extend(apply_copy_distribution_to_spells_traps(spells_traps))
         else:
             optimized_deck.extend(spells_traps)
-            
-        # Update main_deck with our optimized version
         main_deck = optimized_deck
         
-        # 3. Check and fix summoning mechanics requirements based on extra deck
-        
-        # Synchro constraint
-        synchro_ok, main_deck = validate_synchro_requirements(main_deck, extra_deck)
-        
-        # XYZ constraint 
-        xyz_ok, main_deck = validate_xyz_requirements(main_deck, extra_deck)  
-        
-        # Link constraint
+        # 3) Summon-mechanic reachability (attempt to fix main; else prune extra if HARD)
+        # Synchro
+        sync_ok, main_deck = validate_synchro_requirements(main_deck, extra_deck)
+        if not sync_ok and self.hard_synchro:
+            extra_deck = prune_unreachable_extra(extra_deck, keep_types={'Fusion','XYZ','Link'})  # drop Synchros
+            logger.info("HARD Synchro: pruned unreachable Synchros from Extra Deck.")
+        # XYZ
+        xyz_ok, main_deck = validate_xyz_requirements(main_deck, extra_deck)
+        if not xyz_ok and self.hard_xyz:
+            extra_deck = prune_unreachable_extra(extra_deck, keep_types={'Fusion','Synchro','Link'})  # drop XYZ
+            logger.info("HARD XYZ: pruned unreachable XYZs from Extra Deck.")
+        # Link
         link_ok, main_deck = validate_link_requirements(main_deck, extra_deck)
+        if not link_ok and self.hard_link:
+            extra_deck = prune_unreachable_extra(extra_deck, keep_types={'Fusion','Synchro','XYZ'})  # drop Links
+            logger.info("HARD Link: pruned unreachable Links from Extra Deck.")
+        # Pendulum (usually soft)
+        pend_ok, main_deck = validate_pendulum_requirements(main_deck)
+        if not pend_ok and self.hard_pendulum:
+            # nothing to drop in Extra: pendulum is main mechanic; we already tried to fix main
+            logger.info("HARD Pendulum: could not ensure scales; leaving as-is.")
         
-        # Pendulum constraint
-        pendulum_ok, main_deck = validate_pendulum_requirements(main_deck)
-        
-        # Verify 3-copy limit again after all the adjustments
+        # 4) Enforce copy cap again after fixes
         main_deck = apply_max_copies_constraint(main_deck)
+
+        # 5) Trim back to exactly 40, preferring to keep enablers
+        main_deck = trim_back_to_40(main_deck)
         
-        # Shuffle the main deck for randomness
+        # Shuffle main to avoid positional bias
         random.shuffle(main_deck)
-        # Trim the deck to exactly 40 cards if needed
-        if len(main_deck) > 40:
-            main_deck = main_deck[:40]
-        
+
+        # Keep Extra <= 15
+        if len(extra_deck) > self.extra_deck_size:
+            extra_deck = extra_deck[:self.extra_deck_size]
         
         return main_deck, extra_deck
-    
+
+    # -----------------------------
+    # Extra deck generation
+    # -----------------------------
     def _generate_extra_deck(self, target_archetype: Optional[str] = None) -> List[Dict]:
         """Generate extra deck cards. Always returns exactly 15 cards."""
         extra_deck = []
-        target_size = 15
+        target_size = self.extra_deck_size
         
-        # Select clusters containing target archetype for meta-aware decks
+        # Prefer archetype-aligned extra where possible
         if target_archetype:
             archetype_extra_clusters = []
             for cluster_id in self.extra_deck_clusters.keys():
@@ -472,120 +563,73 @@ class DeckGenerator:
                     if target_archetype in card.get('archetypes', []) or card.get('archetype') == target_archetype:
                         archetype_extra_clusters.append(cluster_id)
                         break
-            
-            # Prefer clusters with the target archetype
             if archetype_extra_clusters:
                 selected_clusters = random.sample(
                     archetype_extra_clusters, 
                     min(3, len(archetype_extra_clusters))
                 )
-                
-                # Sample evenly across selected clusters
                 cards_per_cluster = max(1, target_size // len(selected_clusters))
-                cards_added = 0
-                
+                extra_names = set()
                 for cluster_id in selected_clusters:
-                    if cards_added >= target_size:
+                    if len(extra_deck) >= target_size:
                         break
-                    cluster_cards = self.extra_deck_clusters[cluster_id]
-                    if cluster_cards:
-                        # Add cards from this cluster
-                        cards_to_add = min(cards_per_cluster, len(cluster_cards), target_size - cards_added)
-                        selected = random.sample(cluster_cards, cards_to_add)
-                        extra_deck.extend(selected)
-                        cards_added += cards_to_add
-                
-                # Fill remaining slots with generic extra deck cards
-                remaining_slots = target_size - len(extra_deck)
-                if remaining_slots > 0:
-                    all_extra_cards = []
-                    for cards in self.extra_deck_clusters.values():
-                        all_extra_cards.extend(cards)
-                    
-                    # Avoid duplicates
-                    extra_names = {card.get('name', '') for card in extra_deck}
-                    remaining_cards = [card for card in all_extra_cards if card.get('name', '') not in extra_names]
-                    
-                    if remaining_cards:
-                        additional = random.sample(remaining_cards, min(remaining_slots, len(remaining_cards)))
-                        extra_deck.extend(additional)
+                    cluster_cards = [c for c in self.extra_deck_clusters[cluster_id] if c.get('name','') not in extra_names]
+                    to_add = min(cards_per_cluster, len(cluster_cards), target_size - len(extra_deck))
+                    chosen = random.sample(cluster_cards, to_add) if to_add > 0 else []
+                    extra_deck.extend(chosen)
+                    extra_names.update(c.get('name','') for c in chosen)
         
-        # For novel decks or if meta-aware selection didn't fill the extra deck
-        if len(extra_deck) < target_size:
-            # Select 2-3 diverse clusters
-            selected_clusters = random.sample(
-                list(self.extra_deck_clusters.keys()),
-                min(3, len(self.extra_deck_clusters))
-            )
-            
-            # Sample evenly across selected clusters
+        # Fill remaining with diverse clusters
+        if len(extra_deck) < target_size and self.extra_deck_clusters:
+            extra_names = {c.get('name','') for c in extra_deck}
+            pool_ids = list(self.extra_deck_clusters.keys())
+            selected_clusters = random.sample(pool_ids, min(3, len(pool_ids)))
             cards_per_cluster = max(1, (target_size - len(extra_deck)) // len(selected_clusters))
-            
-            # Currently added card names for deduplication
-            extra_names = {card.get('name', '') for card in extra_deck}
-            
             for cluster_id in selected_clusters:
                 if len(extra_deck) >= target_size:
                     break
-                
-                cluster_cards = self.extra_deck_clusters[cluster_id]
-                # Filter out duplicates
-                unique_cards = [card for card in cluster_cards if card.get('name', '') not in extra_names]
-                
-                if unique_cards:
-                    # Add cards from this cluster
-                    cards_to_add = min(cards_per_cluster, len(unique_cards), target_size - len(extra_deck))
-                    selected = random.sample(unique_cards, cards_to_add)
-                    extra_deck.extend(selected)
-                    # Update our set of added names
-                    extra_names.update(card.get('name', '') for card in selected)
+                cluster_cards = [c for c in self.extra_deck_clusters[cluster_id] if c.get('name','') not in extra_names]
+                to_add = min(cards_per_cluster, len(cluster_cards), target_size - len(extra_deck))
+                chosen = random.sample(cluster_cards, to_add) if to_add > 0 else []
+                extra_deck.extend(chosen)
+                extra_names.update(c.get('name','') for c in chosen)
         
-        # If still not at target size, add random unique extra deck cards
-        if len(extra_deck) < target_size:
-            all_extra_cards = []
+        # Final fill from all extra (dedupe names)
+        if len(extra_deck) < target_size and self.extra_deck_clusters:
+            all_extra = []
             for cards in self.extra_deck_clusters.values():
-                all_extra_cards.extend(cards)
-            
-            # Filter out cards we've already added
-            extra_names = {card.get('name', '') for card in extra_deck}
-            remaining_cards = [card for card in all_extra_cards if card.get('name', '') not in extra_names]
-            
-            if remaining_cards:
-                cards_to_add = min(target_size - len(extra_deck), len(remaining_cards))
-                selected = random.sample(remaining_cards, cards_to_add)
-                extra_deck.extend(selected)
-            else:
-                # If we've exhausted unique cards, allow duplicates as a last resort
-                while len(extra_deck) < target_size and all_extra_cards:
-                    extra_deck.append(random.choice(all_extra_cards))
-        
-        # Ensure exactly target size (typically 15)
+                all_extra.extend(cards)
+            extra_names = {c.get('name','') for c in extra_deck}
+            remaining = [c for c in all_extra if c.get('name','') not in extra_names]
+            to_add = min(target_size - len(extra_deck), len(remaining))
+            if to_add > 0:
+                chosen = random.sample(remaining, to_add)
+                extra_deck.extend(chosen)
+
+        # Ensure exactly size and show type diversity stats
         extra_deck = extra_deck[:target_size]
         
-        # Ensure we have a good distribution of summon types in the extra deck
-        # Aim for some variety among Fusion, Synchro, XYZ, and Link
         type_counts = Counter()
         for card in extra_deck:
-            card_type = card.get('type', '')
-            if 'Fusion' in card_type:
-                type_counts['Fusion'] += 1
-            elif 'Synchro' in card_type:
-                type_counts['Synchro'] += 1
-            elif 'XYZ' in card_type:
-                type_counts['XYZ'] += 1
-            elif 'Link' in card_type:
-                type_counts['Link'] += 1
+            ct = card.get('type','')
+            if 'Fusion' in ct: type_counts['Fusion'] += 1
+            elif 'Synchro' in ct: type_counts['Synchro'] += 1
+            elif 'XYZ' in ct: type_counts['XYZ'] += 1
+            elif 'Link' in ct: type_counts['Link'] += 1
         
         logger.info(f"Generated Extra Deck with {len(extra_deck)} cards: "
-                  f"{type_counts.get('Fusion', 0)} Fusion, "
-                  f"{type_counts.get('Synchro', 0)} Synchro, "
-                  f"{type_counts.get('XYZ', 0)} XYZ, "
-                  f"{type_counts.get('Link', 0)} Link")
+                    f"{type_counts.get('Fusion', 0)} Fusion, "
+                    f"{type_counts.get('Synchro', 0)} Synchro, "
+                    f"{type_counts.get('XYZ', 0)} XYZ, "
+                    f"{type_counts.get('Link', 0)} Link")
         
         return extra_deck
 
+    # -----------------------------
+    # Public generation API
+    # -----------------------------
     def generate_deck(self, mode: str = "novel", target_archetype: Optional[str] = None, 
-                    use_mlflow: bool = True) -> Tuple[List[Dict], List[Dict], 'DeckMetadata']:
+                      use_mlflow: bool = True) -> Tuple[List[Dict], List[Dict], 'DeckMetadata']:
         """
         Generate a complete Yu-Gi-Oh! deck with game constraints applied.
         
@@ -599,7 +643,7 @@ class DeckGenerator:
         """
         if use_mlflow:
             # Setup MLflow experiment
-            setup_deck_generation_experiment()
+            setup_experiment()
             
             with mlflow.start_run():
                 # Log tags and parameters
@@ -611,32 +655,35 @@ class DeckGenerator:
                     target_spell_ratio=self.target_spell_ratio, 
                     target_trap_ratio=self.target_trap_ratio,
                     ratio_tolerance=self.ratio_tolerance,
-                    game_constraint_enabled=True  # Log that game constraints are enabled
+                    game_constraint_enabled=True,  # constraints enabled
+                    hard_synchro=self.hard_synchro,
+                    hard_xyz=self.hard_xyz,
+                    hard_link=self.hard_link,
+                    hard_pendulum=self.hard_pendulum,
+                    random_seed=self.random_seed
                 )
                 
                 # Generate the deck
                 main_deck, extra_deck = self._generate_deck_internal(mode, target_archetype)
                 
-                # Apply game constraints (new!)
+                # Apply constraints
                 main_deck, extra_deck = self.apply_game_constraints(main_deck, extra_deck)
                 
                 # Create metadata
                 metadata = DeckMetadata(main_deck, extra_deck, self.clustered_cards)
                 
-                # Log metrics
+                # Log metrics (now includes reachability)
                 log_deck_metrics(main_deck, extra_deck, metadata)
                 
-                # Log deck artifacts (with error handling for S3 issues)
+                # Artifacts
                 try:
                     log_deck_artifacts(main_deck, extra_deck, metadata)
                     logger.info("Successfully logged deck artifacts")
                 except Exception as e:
                     logger.warning(f"Failed to log deck artifacts (likely S3 credentials issue): {e}")
-                    # Continue without artifacts - the experiment tracking still works
                 
                 return main_deck, extra_deck, metadata
         else:
-            # Generate without MLflow tracking
             main_deck, extra_deck = self._generate_deck_internal(mode, target_archetype)
             main_deck, extra_deck = self.apply_game_constraints(main_deck, extra_deck)
             metadata = DeckMetadata(main_deck, extra_deck, self.clustered_cards)
@@ -644,7 +691,6 @@ class DeckGenerator:
     
     def _generate_deck_internal(self, mode: str, target_archetype: Optional[str] = None) -> Tuple[List[Dict], List[Dict]]:
         """Internal deck generation logic without MLflow tracking."""
-        # Randomize ratios for each deck generation
         self._randomize_ratios()
         
         if mode == "meta_aware":
@@ -658,41 +704,28 @@ class DeckGenerator:
     
     def _randomize_ratios(self):
         """Randomize the deck ratios for each deck generation to ensure variety."""
-        # Occasionally generate a deck with very low monster count (15-20 monsters)
         low_monster_ratio = random.random() < 0.15  # 15% chance for low monster count deck
         
         if low_monster_ratio:
-            # Generate a deck with 15-20 monsters (37.5-50% of 40 card deck)
             base_monster = random.uniform(0.375, 0.5)
             logger.info("Generating low monster count deck variant")
         else:
-            # Normal deck with more standard ratios
-            # Apply a stronger random fluctuation for more variation between decks
-            fluctuation = random.uniform(-0.15, 0.2)  # Wider range of fluctuation
-            base_monster = 0.6
-            base_monster = base_monster + fluctuation
+            fluctuation = random.uniform(-0.15, 0.2)
+            base_monster = 0.6 + fluctuation
         
-        # Apply wider bounds for monster ratio
-        # Min 37.5% monsters (15/40), max 80% monsters for greater variety
         self.target_monster_ratio = max(0.375, min(0.8, base_monster))
         
-        # Distribute remaining percentage between spells and traps
-        # Apply additional variation to their distribution
         remaining = 1.0 - self.target_monster_ratio
-        spell_trap_variation = random.uniform(-0.25, 0.25)  # Wider variation between spells and traps
-        
-        # Baseline weights
-        spell_weight = 0.5 + spell_trap_variation  # Can shift between 0.25 and 0.75 of remaining
-        spell_weight = max(0.25, min(0.75, spell_weight))  # Cap between 25% and 75% of remaining
+        spell_trap_variation = random.uniform(-0.25, 0.25)
+        spell_weight = max(0.25, min(0.75, 0.5 + spell_trap_variation))
         trap_weight = 1.0 - spell_weight
         
         self.target_spell_ratio = remaining * spell_weight
         self.target_trap_ratio = remaining * trap_weight
         
-        # Wider tolerance for more variety
         self.ratio_tolerance = 0.25
         
-        logger.info(f"Deck ratios randomized to: {self.target_monster_ratio:.1%}M/{self.target_spell_ratio:.1%}S/{self.target_trap_ratio:.1%}T (±{self.ratio_tolerance:.0%} tolerance)")
+        logger.info(f"Deck ratios randomized to: {self.target_monster_ratio:.1%}M/{self.target_spell_ratio:.1%}S/{self.target_trap_ratio:.1%}T (±{self.ratio_tolerance:.0%} tol)")
     
     def _calculate_target_counts(self, deck_size: int = 40) -> Tuple[int, int, int]:
         """Calculate target counts for each card type based on ratios."""
@@ -700,15 +733,11 @@ class DeckGenerator:
         target_spells = int(deck_size * self.target_spell_ratio)
         target_traps = int(deck_size * self.target_trap_ratio)
         
-        # Adjust to ensure total equals deck_size
         total = target_monsters + target_spells + target_traps
         if total < deck_size:
-            # Add remainder to monsters (most flexible category)
             target_monsters += deck_size - total
         elif total > deck_size:
-            # Remove excess from monsters
             target_monsters -= total - deck_size
-            
         return target_monsters, target_spells, target_traps
     
     def _check_ratios(self, deck: List[Dict]) -> Dict[str, float]:
@@ -716,11 +745,9 @@ class DeckGenerator:
         deck_size = len(deck)
         if deck_size == 0:
             return {'monster_ratio': 0.0, 'spell_ratio': 0.0, 'trap_ratio': 0.0}
-            
-        monster_count = sum(1 for card in deck if card.get('type') and 'Monster' in card.get('type'))
-        spell_count = sum(1 for card in deck if card.get('type') and 'Spell' in card.get('type'))
-        trap_count = sum(1 for card in deck if card.get('type') and 'Trap' in card.get('type'))
-        
+        monster_count = sum(1 for card in deck if is_monster(card))
+        spell_count = sum(1 for card in deck if is_spell(card))
+        trap_count = sum(1 for card in deck if is_trap(card))
         return {
             'monster_ratio': monster_count / deck_size,
             'spell_ratio': spell_count / deck_size,
@@ -730,18 +757,15 @@ class DeckGenerator:
     def _is_ratio_acceptable(self, deck: List[Dict]) -> bool:
         """Check if deck ratios are within acceptable tolerance."""
         ratios = self._check_ratios(deck)
-        
         monster_ok = abs(ratios['monster_ratio'] - self.target_monster_ratio) <= self.ratio_tolerance
         spell_ok = abs(ratios['spell_ratio'] - self.target_spell_ratio) <= self.ratio_tolerance
         trap_ok = abs(ratios['trap_ratio'] - self.target_trap_ratio) <= self.ratio_tolerance
-        
         return monster_ok and spell_ok and trap_ok
         
     def _generate_meta_aware_deck(self, target_archetype: str) -> Tuple[List[Dict], List[Dict]]:
         """Generate a deck anchored on a target archetype with proper card type ratios."""
         logger.info(f"Generating meta-aware deck for archetype: {target_archetype}")
         
-        # Calculate target counts for each card type
         target_monsters, target_spells, target_traps = self._calculate_target_counts(self.num_cards)
         
         # Find clusters containing the target archetype
@@ -749,904 +773,586 @@ class DeckGenerator:
         archetype_spell_clusters = []
         archetype_trap_clusters = []
         
-        # Find clusters with the target archetype
         for cluster_id in self.monster_clusters.keys():
             for card in self.monster_clusters[cluster_id]:
                 if target_archetype in card.get('archetypes', []) or card.get('archetype') == target_archetype:
                     archetype_monster_clusters.append(cluster_id)
                     break
-                    
         for cluster_id in self.spell_clusters.keys():
             for card in self.spell_clusters[cluster_id]:
                 if target_archetype in card.get('archetypes', []) or card.get('archetype') == target_archetype:
                     archetype_spell_clusters.append(cluster_id)
                     break
-                    
         for cluster_id in self.trap_clusters.keys():
             for card in self.trap_clusters[cluster_id]:
                 if target_archetype in card.get('archetypes', []) or card.get('archetype') == target_archetype:
                     archetype_trap_clusters.append(cluster_id)
                     break
         
-        # Add monsters from the archetype (60% of deck, ~24 cards)
         main_deck = []
+        # Monsters
         monsters_added = 0
-        
-        # First, prioritize clusters with the target archetype
         for cluster_id in archetype_monster_clusters:
             if monsters_added >= target_monsters:
                 break
-            
             archetype_cards = [
                 card for card in self.monster_clusters[cluster_id]
                 if target_archetype in card.get('archetypes', []) or card.get('archetype') == target_archetype
             ]
-            
-            # Take all archetype cards, but don't exceed target
-            cards_to_add = min(len(archetype_cards), target_monsters - monsters_added)
-            if cards_to_add > 0:
-                selected = random.sample(archetype_cards, cards_to_add)
-                main_deck.extend(selected)
-                monsters_added += cards_to_add
-        
-        # If we still need more monsters, add from archetype clusters
-        remaining_slots = target_monsters - monsters_added
-        if remaining_slots > 0 and archetype_monster_clusters:
-            # Collect all remaining monster cards from archetype clusters
-            remaining_cards = []
+            to_add = min(len(archetype_cards), target_monsters - monsters_added)
+            if to_add > 0:
+                chosen = random.sample(archetype_cards, to_add)
+                main_deck.extend(chosen)
+                monsters_added += to_add
+        remaining = target_monsters - monsters_added
+        if remaining > 0 and archetype_monster_clusters:
+            pool = []
             for cluster_id in archetype_monster_clusters:
                 cluster_cards = self.monster_clusters[cluster_id]
-                already_added = [card for card in main_deck if card in cluster_cards]
-                remaining_cards.extend([card for card in cluster_cards if card not in already_added])
-            
-            # Add more unique monsters from these clusters
-            if remaining_cards:
-                cards_to_add = min(len(remaining_cards), remaining_slots)
-                selected = random.sample(remaining_cards, cards_to_add)
-                main_deck.extend(selected)
-                monsters_added += cards_to_add
-                remaining_slots = target_monsters - monsters_added
-        
-        # If we still need more monsters, add from any cluster
-        if remaining_slots > 0:
-            all_monster_cards = []
+                pool.extend([c for c in cluster_cards if c not in main_deck])
+            if pool:
+                chosen = random.sample(pool, min(remaining, len(pool)))
+                main_deck.extend(chosen)
+                monsters_added += len(chosen)
+        if target_monsters - monsters_added > 0:
+            pool = []
             for cluster_id in self.monster_clusters.keys():
-                cluster_cards = self.monster_clusters[cluster_id]
-                already_added = [card for card in main_deck if card in cluster_cards]
-                all_monster_cards.extend([card for card in cluster_cards if card not in already_added])
-            
-            if all_monster_cards:
-                cards_to_add = min(len(all_monster_cards), remaining_slots)
-                selected = random.sample(all_monster_cards, cards_to_add)
-                main_deck.extend(selected)
-                monsters_added += cards_to_add
+                pool.extend([c for c in self.monster_clusters[cluster_id] if c not in main_deck])
+            if pool:
+                chosen = random.sample(pool, min(target_monsters - monsters_added, len(pool)))
+                main_deck.extend(chosen)
+                monsters_added += len(chosen)
         
-        # Add spells (20% of deck, ~8 cards)
+        # Spells
         spells_added = 0
-        
-        # First, prioritize archetype-specific spells
         for cluster_id in archetype_spell_clusters:
             if spells_added >= target_spells:
                 break
-            
             archetype_cards = [
                 card for card in self.spell_clusters[cluster_id]
                 if target_archetype in card.get('archetypes', []) or card.get('archetype') == target_archetype
             ]
-            
-            # Take all archetype cards, but don't exceed target
-            cards_to_add = min(len(archetype_cards), target_spells - spells_added)
-            if cards_to_add > 0:
-                selected = random.sample(archetype_cards, cards_to_add)
-                main_deck.extend(selected)
-                spells_added += cards_to_add
-        
-        # If we still need more spells, add from archetype clusters
-        remaining_slots = target_spells - spells_added
-        if remaining_slots > 0 and archetype_spell_clusters:
-            remaining_cards = []
+            to_add = min(len(archetype_cards), target_spells - spells_added)
+            if to_add > 0:
+                chosen = random.sample(archetype_cards, to_add)
+                main_deck.extend(chosen)
+                spells_added += to_add
+        remaining = target_spells - spells_added
+        if remaining > 0 and archetype_spell_clusters:
+            pool = []
             for cluster_id in archetype_spell_clusters:
-                cluster_cards = self.spell_clusters[cluster_id]
-                already_added = [card for card in main_deck if card in cluster_cards]
-                remaining_cards.extend([card for card in cluster_cards if card not in already_added])
-            
-            if remaining_cards:
-                cards_to_add = min(len(remaining_cards), remaining_slots)
-                selected = random.sample(remaining_cards, cards_to_add)
-                main_deck.extend(selected)
-                spells_added += cards_to_add
-                remaining_slots = target_spells - spells_added
-        
-        # If we still need more spells, add from any cluster
-        if remaining_slots > 0:
-            all_spell_cards = []
+                pool.extend([c for c in self.spell_clusters[cluster_id] if c not in main_deck])
+            if pool:
+                chosen = random.sample(pool, min(remaining, len(pool)))
+                main_deck.extend(chosen)
+                spells_added += len(chosen)
+        if target_spells - spells_added > 0:
+            pool = []
             for cluster_id in self.spell_clusters.keys():
-                cluster_cards = self.spell_clusters[cluster_id]
-                already_added = [card for card in main_deck if card in cluster_cards]
-                all_spell_cards.extend([card for card in cluster_cards if card not in already_added])
-            
-            if all_spell_cards:
-                cards_to_add = min(len(all_spell_cards), remaining_slots)
-                selected = random.sample(all_spell_cards, cards_to_add)
-                main_deck.extend(selected)
-                spells_added += cards_to_add
+                pool.extend([c for c in self.spell_clusters[cluster_id] if c not in main_deck])
+            if pool:
+                chosen = random.sample(pool, min(target_spells - spells_added, len(pool)))
+                main_deck.extend(chosen)
+                spells_added += len(chosen)
         
-        # Add traps (20% of deck, ~8 cards)
+        # Traps
         traps_added = 0
-        
-        # First, prioritize archetype-specific traps
         for cluster_id in archetype_trap_clusters:
             if traps_added >= target_traps:
                 break
-            
             archetype_cards = [
                 card for card in self.trap_clusters[cluster_id]
                 if target_archetype in card.get('archetypes', []) or card.get('archetype') == target_archetype
             ]
-            
-            # Take all archetype cards, but don't exceed target
-            cards_to_add = min(len(archetype_cards), target_traps - traps_added)
-            if cards_to_add > 0:
-                selected = random.sample(archetype_cards, cards_to_add)
-                main_deck.extend(selected)
-                traps_added += cards_to_add
-        
-        # If we still need more traps, add from archetype clusters
-        remaining_slots = target_traps - traps_added
-        if remaining_slots > 0 and archetype_trap_clusters:
-            remaining_cards = []
+            to_add = min(len(archetype_cards), target_traps - traps_added)
+            if to_add > 0:
+                chosen = random.sample(archetype_cards, to_add)
+                main_deck.extend(chosen)
+                traps_added += to_add
+        remaining = target_traps - traps_added
+        if remaining > 0 and archetype_trap_clusters:
+            pool = []
             for cluster_id in archetype_trap_clusters:
-                cluster_cards = self.trap_clusters[cluster_id]
-                already_added = [card for card in main_deck if card in cluster_cards]
-                remaining_cards.extend([card for card in cluster_cards if card not in already_added])
-            
-            if remaining_cards:
-                cards_to_add = min(len(remaining_cards), remaining_slots)
-                selected = random.sample(remaining_cards, cards_to_add)
-                main_deck.extend(selected)
-                traps_added += cards_to_add
-                remaining_slots = target_traps - traps_added
-        
-        # If we still need more traps, add from any cluster
-        if remaining_slots > 0:
-            all_trap_cards = []
+                pool.extend([c for c in self.trap_clusters[cluster_id] if c not in main_deck])
+            if pool:
+                chosen = random.sample(pool, min(remaining, len(pool)))
+                main_deck.extend(chosen)
+                traps_added += len(chosen)
+        if target_traps - traps_added > 0:
+            pool = []
             for cluster_id in self.trap_clusters.keys():
-                cluster_cards = self.trap_clusters[cluster_id]
-                already_added = [card for card in main_deck if card in cluster_cards]
-                all_trap_cards.extend([card for card in cluster_cards if card not in already_added])
-            
-            if all_trap_cards:
-                cards_to_add = min(len(all_trap_cards), remaining_slots)
-                selected = random.sample(all_trap_cards, cards_to_add)
-                main_deck.extend(selected)
-                traps_added += cards_to_add
+                pool.extend([c for c in self.trap_clusters[cluster_id] if c not in main_deck])
+            if pool:
+                chosen = random.sample(pool, min(target_traps - traps_added, len(pool)))
+                main_deck.extend(chosen)
+                traps_added += len(chosen)
         
-        # Ensure exactly 40 cards and fill any remaining slots
+        # Fill to 40 respecting ratios
         if len(main_deck) < self.num_cards:
-            # Determine which type we need more of based on current ratios
             ratios = self._check_ratios(main_deck)
-            
             while len(main_deck) < self.num_cards:
                 if ratios['monster_ratio'] < self.target_monster_ratio - 0.05 and self.monster_clusters:
-                    # Need more monsters
-                    all_monster_cards = [card for cards in self.monster_clusters.values() for card in cards 
-                                       if card not in main_deck]
-                    if all_monster_cards:
-                        main_deck.append(random.choice(all_monster_cards))
+                    pool = [c for cards in self.monster_clusters.values() for c in cards if c not in main_deck]
+                    if pool: main_deck.append(random.choice(pool))
                 elif ratios['spell_ratio'] < self.target_spell_ratio - 0.05 and self.spell_clusters:
-                    # Need more spells
-                    all_spell_cards = [card for cards in self.spell_clusters.values() for card in cards
-                                     if card not in main_deck]
-                    if all_spell_cards:
-                        main_deck.append(random.choice(all_spell_cards))
+                    pool = [c for cards in self.spell_clusters.values() for c in cards if c not in main_deck]
+                    if pool: main_deck.append(random.choice(pool))
                 elif ratios['trap_ratio'] < self.target_trap_ratio - 0.05 and self.trap_clusters:
-                    # Need more traps
-                    all_trap_cards = [card for cards in self.trap_clusters.values() for card in cards
-                                    if card not in main_deck]
-                    if all_trap_cards:
-                        main_deck.append(random.choice(all_trap_cards))
+                    pool = [c for cards in self.trap_clusters.values() for c in cards if c not in main_deck]
+                    if pool: main_deck.append(random.choice(pool))
                 else:
-                    # Fill with any available card
-                    all_main_cards = [card for cards in self.main_deck_clusters.values() for card in cards
-                                    if card not in main_deck]
-                    if all_main_cards:
-                        main_deck.append(random.choice(all_main_cards))
-                    else:
-                        break  # Can't find more unique cards
-                
-                # Recalculate ratios
+                    pool = [c for cards in self.main_deck_clusters.values() for c in cards if c not in main_deck]
+                    if pool: main_deck.append(random.choice(pool))
+                    else: break
                 ratios = self._check_ratios(main_deck)
         
-        # Trim to exactly 40 cards if needed
         main_deck = main_deck[:self.num_cards]
-        
-        # Generate extra deck
         extra_deck = self._generate_extra_deck(target_archetype)
         
-        # Log ratio results
         final_ratios = self._check_ratios(main_deck)
-        logger.info(f"Generated meta-aware deck with ratios: "
-                   f"Monsters: {final_ratios['monster_ratio']:.1%}, "
-                   f"Spells: {final_ratios['spell_ratio']:.1%}, "
-                   f"Traps: {final_ratios['trap_ratio']:.1%}")
-        
+        logger.info(f"Generated meta-aware deck ratios: "
+                    f"M {final_ratios['monster_ratio']:.1%} / "
+                    f"S {final_ratios['spell_ratio']:.1%} / "
+                    f"T {final_ratios['trap_ratio']:.1%}")
         return main_deck, extra_deck
     
     def _generate_novel_deck(self) -> Tuple[List[Dict], List[Dict]]:
         """Generate a novel deck by combining diverse clusters with proper card type ratios."""
         logger.info("Generating novel deck with diverse cluster combination and proper ratios")
         
-        # Calculate target counts for each card type
         target_monsters, target_spells, target_traps = self._calculate_target_counts(self.num_cards)
-        
         main_deck = []
         
-        # Select diverse clusters for each card type
         monster_cluster_ids = list(self.monster_clusters.keys())
         spell_cluster_ids = list(self.spell_clusters.keys())
         trap_cluster_ids = list(self.trap_clusters.keys())
         
-        # Add monsters (60% of deck, ~24 cards)
+        # Monsters
         if monster_cluster_ids:
-            selected_monster_clusters = random.sample(monster_cluster_ids, min(3, len(monster_cluster_ids)))
-            monsters_per_cluster = target_monsters // len(selected_monster_clusters)
-            monsters_added = 0
-            
-            for cluster_id in selected_monster_clusters:
-                if monsters_added >= target_monsters:
-                    break
-                cluster_cards = self.monster_clusters[cluster_id]
-                cards_to_add = min(monsters_per_cluster, len(cluster_cards), target_monsters - monsters_added)
-                if cards_to_add > 0:
-                    selected = random.sample(cluster_cards, cards_to_add)
-                    main_deck.extend(selected)
-                    monsters_added += len(selected)
-            
-            # Fill remaining monster slots if needed
-            while monsters_added < target_monsters and monster_cluster_ids:
-                remaining_slots = target_monsters - monsters_added
-                all_monster_cards = [card for cards in self.monster_clusters.values() for card in cards 
-                                   if card not in main_deck]
-                if all_monster_cards:
-                    additional = random.sample(all_monster_cards, min(remaining_slots, len(all_monster_cards)))
-                    main_deck.extend(additional)
-                    monsters_added += len(additional)
-                else:
-                    break
+            selected = random.sample(monster_cluster_ids, min(3, len(monster_cluster_ids)))
+            per = max(1, target_monsters // len(selected))
+            added = 0
+            for cid in selected:
+                if added >= target_monsters: break
+                cards = self.monster_clusters[cid]
+                to_add = min(per, len(cards), target_monsters - added)
+                if to_add > 0:
+                    chosen = random.sample(cards, to_add)
+                    main_deck.extend(chosen)
+                    added += to_add
+            while added < target_monsters:
+                pool = [c for cards in self.monster_clusters.values() for c in cards if c not in main_deck]
+                if not pool: break
+                extra = random.sample(pool, min(target_monsters - added, len(pool)))
+                main_deck.extend(extra)
+                added += len(extra)
         
-        # Add spells (20% of deck, ~8 cards)
+        # Spells
         if spell_cluster_ids:
-            selected_spell_clusters = random.sample(spell_cluster_ids, min(2, len(spell_cluster_ids)))
-            spells_per_cluster = max(1, target_spells // len(selected_spell_clusters))
-            spells_added = 0
-            
-            for cluster_id in selected_spell_clusters:
-                if spells_added >= target_spells:
-                    break
-                cluster_cards = self.spell_clusters[cluster_id]
-                cards_to_add = min(spells_per_cluster, len(cluster_cards), target_spells - spells_added)
-                if cards_to_add > 0:
-                    selected = random.sample(cluster_cards, cards_to_add)
-                    main_deck.extend(selected)
-                    spells_added += len(selected)
-            
-            # Fill remaining spell slots if needed
-            while spells_added < target_spells and spell_cluster_ids:
-                remaining_slots = target_spells - spells_added
-                all_spell_cards = [card for cards in self.spell_clusters.values() for card in cards
-                                 if card not in main_deck]
-                if all_spell_cards:
-                    additional = random.sample(all_spell_cards, min(remaining_slots, len(all_spell_cards)))
-                    main_deck.extend(additional)
-                    spells_added += len(additional)
-                else:
-                    break
+            selected = random.sample(spell_cluster_ids, min(2, len(spell_cluster_ids)))
+            per = max(1, target_spells // len(selected))
+            added = 0
+            for cid in selected:
+                if added >= target_spells: break
+                cards = self.spell_clusters[cid]
+                to_add = min(per, len(cards), target_spells - added)
+                if to_add > 0:
+                    chosen = random.sample(cards, to_add)
+                    main_deck.extend(chosen)
+                    added += to_add
+            while added < target_spells:
+                pool = [c for cards in self.spell_clusters.values() for c in cards if c not in main_deck]
+                if not pool: break
+                extra = random.sample(pool, min(target_spells - added, len(pool)))
+                main_deck.extend(extra)
+                added += len(extra)
         
-        # Add traps (20% of deck, ~8 cards)
+        # Traps
         if trap_cluster_ids:
-            selected_trap_clusters = random.sample(trap_cluster_ids, min(2, len(trap_cluster_ids)))
-            traps_per_cluster = max(1, target_traps // len(selected_trap_clusters))
-            traps_added = 0
-            
-            for cluster_id in selected_trap_clusters:
-                if traps_added >= target_traps:
-                    break
-                cluster_cards = self.trap_clusters[cluster_id]
-                cards_to_add = min(traps_per_cluster, len(cluster_cards), target_traps - traps_added)
-                if cards_to_add > 0:
-                    selected = random.sample(cluster_cards, cards_to_add)
-                    main_deck.extend(selected)
-                    traps_added += len(selected)
-            
-            # Fill remaining trap slots if needed
-            while traps_added < target_traps and trap_cluster_ids:
-                remaining_slots = target_traps - traps_added
-                all_trap_cards = [card for cards in self.trap_clusters.values() for card in cards
-                                if card not in main_deck]
-                if all_trap_cards:
-                    additional = random.sample(all_trap_cards, min(remaining_slots, len(all_trap_cards)))
-                    main_deck.extend(additional)
-                    traps_added += len(additional)
-                else:
-                    break
+            selected = random.sample(trap_cluster_ids, min(2, len(trap_cluster_ids)))
+            per = max(1, target_traps // len(selected))
+            added = 0
+            for cid in selected:
+                if added >= target_traps: break
+                cards = self.trap_clusters[cid]
+                to_add = min(per, len(cards), target_traps - added)
+                if to_add > 0:
+                    chosen = random.sample(cards, to_add)
+                    main_deck.extend(chosen)
+                    added += to_add
+            while added < target_traps:
+                pool = [c for cards in self.trap_clusters.values() for c in cards if c not in main_deck]
+                if not pool: break
+                extra = random.sample(pool, min(target_traps - added, len(pool)))
+                main_deck.extend(extra)
+                added += len(extra)
         
-        # Ensure exactly 40 cards and fill any remaining slots
+        # Fill to 40
         while len(main_deck) < self.num_cards:
-            # Determine which type we need more of based on current ratios
             ratios = self._check_ratios(main_deck)
-            
             if ratios['monster_ratio'] < self.target_monster_ratio - 0.05 and self.monster_clusters:
-                # Need more monsters
-                all_monster_cards = [card for cards in self.monster_clusters.values() for card in cards
-                                   if card not in main_deck]
-                if all_monster_cards:
-                    main_deck.append(random.choice(all_monster_cards))
+                pool = [c for cards in self.monster_clusters.values() for c in cards if c not in main_deck]
+                if pool: main_deck.append(random.choice(pool))
             elif ratios['spell_ratio'] < self.target_spell_ratio - 0.05 and self.spell_clusters:
-                # Need more spells
-                all_spell_cards = [card for cards in self.spell_clusters.values() for card in cards
-                                 if card not in main_deck]
-                if all_spell_cards:
-                    main_deck.append(random.choice(all_spell_cards))
+                pool = [c for cards in self.spell_clusters.values() for c in cards if c not in main_deck]
+                if pool: main_deck.append(random.choice(pool))
             elif ratios['trap_ratio'] < self.target_trap_ratio - 0.05 and self.trap_clusters:
-                # Need more traps
-                all_trap_cards = [card for cards in self.trap_clusters.values() for card in cards
-                                if card not in main_deck]
-                if all_trap_cards:
-                    main_deck.append(random.choice(all_trap_cards))
+                pool = [c for cards in self.trap_clusters.values() for c in cards if c not in main_deck]
+                if pool: main_deck.append(random.choice(pool))
             else:
-                # Fill with any available card
-                all_main_cards = [card for cards in self.main_deck_clusters.values() for card in cards
-                                if card not in main_deck]
-                if all_main_cards:
-                    main_deck.append(random.choice(all_main_cards))
-                else:
-                    break
+                pool = [c for cards in self.main_deck_clusters.values() for c in cards if c not in main_deck]
+                if pool: main_deck.append(random.choice(pool))
+                else: break
         
-        # Trim to exactly 40 cards if needed
         main_deck = main_deck[:self.num_cards]
-        
-        # Generate extra deck
         extra_deck = self._generate_extra_deck()
         
-        # Log ratio results
         final_ratios = self._check_ratios(main_deck)
-        logger.info(f"Generated novel deck with ratios: "
-                  f"Monsters: {final_ratios['monster_ratio']:.1%}, "
-                  f"Spells: {final_ratios['spell_ratio']:.1%}, "
-                  f"Traps: {final_ratios['trap_ratio']:.1%}")
-        
+        logger.info(f"Generated novel deck ratios: "
+                    f"M {final_ratios['monster_ratio']:.1%} / "
+                    f"S {final_ratios['spell_ratio']:.1%} / "
+                    f"T {final_ratios['trap_ratio']:.1%}")
         return main_deck, extra_deck
+
+
+# =========================
+# Copy distribution helpers
+# =========================
 
 def apply_copy_distribution_to_monsters(cards: List[Dict], deck_size: int = 40) -> List[Dict]:
     """
     Apply a realistic distribution of card copies for monster cards using a refined greedy strategy.
-    
-    Strategy:
-    1. Get target number of monsters based on deck size and monster ratio
-    2. Shuffle list of unique monsters
-    3. Repeatedly pick monsters and assign 1-3 copies using weighted random choices
-    4. Stop when reaching target monster count
-    
-    Args:
-        cards: List of monster card dictionaries (already filtered to just monsters)
-        deck_size: Target size for result (optional, defaults to 40)
-    
-    Returns:
-        Updated list of cards with realistic copy distribution
     """
-    # Group cards by name for easier processing
     card_groups = defaultdict(list)
     for card in cards:
-        card_name = card.get('name', '')
-        if card_name:  # Skip cards with no name
-            card_groups[card_name].append(card)
-    
-    # Calculate target number of monsters (use current count as target)
+        name = card.get('name', '')
+        if name:
+            card_groups[name].append(card)
     num_monsters = len(cards)
     if num_monsters == 0:
         return []
-    
-    # Get unique monsters and shuffle them
     monster_names = list(card_groups.keys())
     random.shuffle(monster_names)
-    
-    # Initialize result and tracking variables
     result = []
     copy_assignments = {}
     total_added = 0
-    
-    # Weights for random selection (higher weight for 3-copies and 2-copies)
-    # These weights make 3-copies more common, followed by 2-copies, with 1-copies being least common
-    copy_weights = {
-        3: 50,  # Higher weight for 3-copies
-        2: 40,  # Medium weight for 2-copies
-        1: 10   # Lower weight for 1-copies
-    }
-    
-    # Process each monster name in shuffled order
+    copy_weights = {3: 50, 2: 40, 1: 10}
     while total_added < num_monsters and monster_names:
-        # If we're almost at our target, adjust weights to prefer smaller copy counts
         remaining = num_monsters - total_added
         if remaining <= 3:
-            # Prioritize exact fit for last few slots
-            possible_copies = [c for c in [1, 2, 3] if c <= remaining]
-            if not possible_copies:
-                break
-            copy_count = max(possible_copies)
+            possible = [c for c in [1,2,3] if c <= remaining]
+            if not possible: break
+            copy_count = max(possible)
         else:
-            # Weighted random choice of copy count (1, 2, or 3)
-            possible_copies = [1, 2, 3]
-            # Adjust weights to favor higher copy counts more strongly
-            weights = [copy_weights[c] for c in possible_copies]
-            copy_count = random.choices(possible_copies, weights=weights, k=1)[0]
-        
-        # Get next monster name from shuffled list
+            weights = [copy_weights[c] for c in [1,2,3]]
+            copy_count = random.choices([1,2,3], weights=weights, k=1)[0]
         if not monster_names:
             break
-        card_name = monster_names.pop(0)
-        
-        # Assign copy count, with a bias toward 3-copies for key monsters
-        # 60% chance to maximize copies if remaining >= 3
+        name = monster_names.pop(0)
         if remaining >= 3 and random.random() < 0.6:
-            actual_copies = 3
+            actual = 3
         else:
-            actual_copies = min(copy_count, remaining)
-            
-        copy_assignments[card_name] = actual_copies
-        total_added += actual_copies
-        
-        # If we reached our target, stop adding
+            actual = min(copy_count, remaining)
+        copy_assignments[name] = actual
+        total_added += actual
         if total_added >= num_monsters:
             break
-    
-    # Build the new monster list with assigned copy counts
-    for card_name, copy_count in copy_assignments.items():
-        card_variants = card_groups[card_name]
-        
-        if len(card_variants) >= copy_count:
-            # Use different dicts if you have enough
-            result.extend(card_variants[:copy_count])
+    for name, cnt in copy_assignments.items():
+        variants = card_groups[name]
+        if len(variants) >= cnt:
+            result.extend(variants[:cnt])
         else:
-            # Repeat the single available dict if needed
-            result.extend(card_variants * copy_count)
-
-    # If we still have room for more monsters and can add more 2-ofs or 3-ofs
-    # by repeating what we have, do it to create a more consistent deck
+            result.extend(variants * cnt)
     if total_added < num_monsters and result:
-        # Find monsters already in the deck with 1-2 copies to potentially add more
-        name_counts = Counter(card.get('name', '') for card in result)
-        candidates = [name for name, count in name_counts.items() if 1 <= count <= 2]
-        
+        name_counts = Counter(card.get('name','') for card in result)
+        candidates = [n for n, c in name_counts.items() if 1 <= c <= 2]
         while total_added < num_monsters and candidates:
-            # Pick a random candidate to increase copies
-            card_name = random.choice(candidates)
-            current_copies = name_counts[card_name]
-            
-            # Don't exceed 3 copies
-            if current_copies < 3:
-                # Add one more copy
-                if card_name in card_groups and card_groups[card_name]:
-                    result.append(card_groups[card_name][0])
+            name = random.choice(candidates)
+            cur = name_counts[name]
+            if cur < 3:
+                if name in card_groups and card_groups[name]:
+                    result.append(card_groups[name][0])
                     total_added += 1
-                    name_counts[card_name] += 1
-                    
-                    # If we reached 3 copies, remove from candidates
-                    if name_counts[card_name] >= 3:
-                        candidates.remove(card_name)
+                    name_counts[name] += 1
+                    if name_counts[name] >= 3:
+                        candidates.remove(name)
             else:
-                candidates.remove(card_name)
-    
-    # Log the distribution we achieved
+                candidates.remove(name)
     final_counts = Counter()
-    for card_name in set(card.get('name', '') for card in result):
-        copies = sum(1 for card in result if card.get('name', '') == card_name)
+    for name in set(card.get('name','') for card in result):
+        copies = sum(1 for card in result if card.get('name','') == name)
         final_counts[copies] += 1
-    
     total_monsters = sum(count * copies for copies, count in final_counts.items())
-    logger.info(f"Monster copy distribution (improved greedy strategy): " +
-              f"{final_counts.get(3, 0)} cards as 3-ofs, " +
-              f"{final_counts.get(2, 0)} cards as 2-ofs, " +
-              f"{final_counts.get(1, 0)} cards as 1-ofs " +
-              f"(total {total_monsters} monsters)")
-    
+    logger.info(f"Monster copies: 3-of {final_counts.get(3,0)}, 2-of {final_counts.get(2,0)}, 1-of {final_counts.get(1,0)} (total {total_monsters})")
     return result
 
 def apply_copy_distribution_to_spells_traps(cards: List[Dict]) -> List[Dict]:
     """
     Apply a realistic distribution of card copies for spell and trap cards.
-    
-    Key spells and traps should be 2-3 copies (30-40%)
-    Tech/situational cards should be 1 copy (60-70%)
-    No card should have more than 3 copies
-    
-    Args:
-        cards: List of spell/trap card dictionaries
-    
-    Returns:
-        Updated list of cards with realistic copy distribution
     """
-    # Group cards by name for easier processing
     card_groups = defaultdict(list)
     for card in cards:
-        card_name = card.get('name', '')
-        if card_name:  # Skip cards with no name
-            card_groups[card_name].append(card)
-    
-    # Calculate target distribution
-    unique_cards = len(card_groups)
-    if unique_cards == 0:
+        name = card.get('name','')
+        if name:
+            card_groups[name].append(card)
+    unique = len(card_groups)
+    if unique == 0:
         return []
-    
-    # Get the number of cards we're dealing with
-    num_cards = len(cards)
-    
-    # Target distribution percentages - more 2-ofs and 3-ofs for consistency
-    pct_3copies = 0.25  # 25% as 3-ofs
-    pct_2copies = 0.25  # 25% as 2-ofs
-    pct_1copies = 0.50  # 50% as 1-ofs
-    
-    # Calculate how many of each copy count we need
-    target_3copies = max(1, int(unique_cards * pct_3copies))
-    target_2copies = max(1, int(unique_cards * pct_2copies))
-    target_1copies = unique_cards - target_3copies - target_2copies
-    
-    # Adjust if we have very few unique cards
-    if unique_cards <= 3:
-        # If 3 or fewer unique cards, make them all 3-ofs
-        target_3copies = unique_cards
-        target_2copies = 0
-        target_1copies = 0
-    elif unique_cards <= 6:
-        # If 6 or fewer unique cards, make half 3-ofs and half 2-ofs
-        target_3copies = unique_cards // 2
-        target_2copies = unique_cards - target_3copies
-        target_1copies = 0
-    
-    # Assign copy counts to each unique card
-    card_names = list(card_groups.keys())
-    random.shuffle(card_names)  # Shuffle to randomize which cards get which copy count
-    
-    copy_assignments = {}
-    
-    # Assign 3-ofs
-    for i in range(target_3copies):
-        if i < len(card_names):
-            copy_assignments[card_names[i]] = 3
-    
-    # Assign 2-ofs
-    for i in range(target_3copies, target_3copies + target_2copies):
-        if i < len(card_names):
-            copy_assignments[card_names[i]] = 2
-    
-    # Assign 1-ofs (all remaining cards)
-    for i in range(target_3copies + target_2copies, len(card_names)):
-        copy_assignments[card_names[i]] = 1
-    
-    # Build the result
+    pct_3, pct_2, pct_1 = 0.25, 0.25, 0.50
+    target_3 = max(1, int(unique * pct_3))
+    target_2 = max(1, int(unique * pct_2))
+    target_1 = unique - target_3 - target_2
+    if unique <= 3:
+        target_3, target_2, target_1 = unique, 0, 0
+    elif unique <= 6:
+        target_3, target_2, target_1 = unique // 2, unique - (unique // 2), 0
+    names = list(card_groups.keys())
+    random.shuffle(names)
+    assign = {}
+    for i in range(target_3):
+        if i < len(names):
+            assign[names[i]] = 3
+    for i in range(target_3, target_3 + target_2):
+        if i < len(names):
+            assign[names[i]] = 2
+    for i in range(target_3 + target_2, len(names)):
+        assign[names[i]] = 1
     result = []
-    for card_name, copy_count in copy_assignments.items():
-        original_cards = card_groups[card_name]
-        if len(original_cards) >= copy_count:
-            result.extend(original_cards[:copy_count])
+    for name, cnt in assign.items():
+        orig = card_groups[name]
+        if len(orig) >= cnt:
+            result.extend(orig[:cnt])
         else:
-            result.extend(original_cards * copy_count)  # Add multiple copies if needed
-    
-    # Log the distribution we achieved
+            result.extend(orig * cnt)
     final_counts = Counter()
-    for card_name in set(card.get('name', '') for card in result):
-        copies = sum(1 for card in result if card.get('name', '') == card_name)
+    for name in set(card.get('name','') for card in result):
+        copies = sum(1 for card in result if card.get('name','') == name)
         final_counts[copies] += 1
-    
     total_st = sum(count * copies for copies, count in final_counts.items())
-    logger.info(f"Spell/Trap copy distribution: " +
-              f"{final_counts.get(3, 0)} cards as 3-ofs, " +
-              f"{final_counts.get(2, 0)} cards as 2-ofs, " +
-              f"{final_counts.get(1, 0)} cards as 1-ofs " +
-              f"(total {total_st} S/T cards)")
-    
+    logger.info(f"Spell/Trap copies: 3-of {final_counts.get(3,0)}, 2-of {final_counts.get(2,0)}, 1-of {final_counts.get(1,0)} (total {total_st})")
     return result
+
+
+# =========================
+# Reachability validators
+# =========================
 
 def validate_synchro_requirements(main_deck: List[Dict], extra_deck: List[Dict]) -> Tuple[bool, List[Dict]]:
     """
-    Validate and fix Synchro summoning requirements.
-    
-    If Extra Deck has Synchro monsters:
-    1. Ensure Main Deck has at least one Tuner monster
-    2. Try to ensure levels are compatible with Synchro monsters
-    
-    Args:
-        main_deck: The main deck cards
-        extra_deck: The extra deck cards
-    
-    Returns:
-        Tuple of (requirements_met, updated_main_deck)
+    Validate and (soft-)fix Synchro summoning requirements.
     """
-    # Check if we have any Synchro monsters in the Extra Deck
     synchro_monsters = [card for card in extra_deck if card.get('type') and 'Synchro' in card.get('type')]
     if not synchro_monsters:
-        return True, main_deck  # No Synchro monsters, no need to validate
-    
-    # Check if we have any Tuners in the Main Deck
+        return True, main_deck
     tuners = [card for card in main_deck if is_tuner(card)]
-    
     if tuners:
-        logger.info(f"Synchro requirement met: Main Deck has {len(tuners)} Tuner monsters")
-        # We have tuners, check if levels can match synchro requirements
-        
-        # Get levels of tuners and non-tuners
-        tuner_levels = [get_monster_level(card) for card in tuners]
-        non_tuners = [card for card in main_deck if card.get('type') and 'Monster' in card.get('type') and not is_tuner(card)]
-        non_tuner_levels = [get_monster_level(card) for card in non_tuners]
-        
-        # Get levels of synchro monsters
-        synchro_levels = [get_monster_level(card) for card in synchro_monsters]
-        
-        # Check if we can make valid synchro summons
-        can_synchro = False
-        for tuner_level in tuner_levels:
-            for non_tuner_level in non_tuner_levels:
-                sum_level = tuner_level + non_tuner_level
-                if any(sum_level == synchro_level for synchro_level in synchro_levels):
-                    can_synchro = True
-                    break
-            if can_synchro:
-                break
-                
-        if can_synchro:
-            logger.info("Synchro level requirements met: Main Deck contains compatible levels for Synchro Summons")
-            return True, main_deck
-        else:
-            logger.info("Synchro levels not optimal - but this is a soft requirement, continuing with existing monsters")
-            return True, main_deck  # Still return True as this is a soft constraint
+        tuner_levels = [get_monster_level(c) for c in tuners]
+        non_tuners = [c for c in main_deck if is_monster(c) and not is_tuner(c)]
+        nt_levels = [get_monster_level(c) for c in non_tuners]
+        syn_levels = [get_monster_level(c) for c in synchro_monsters]
+        for t in tuner_levels:
+            for n in nt_levels:
+                if (t + n) in syn_levels:
+                    logger.info("Synchro levels reachable.")
+                    return True, main_deck
+        logger.info("Synchro levels not optimal - treating as soft if tuners exist.")
+        return True, main_deck
     else:
-        # We don't have tuners but need them - get the DeckGenerator instance to add a tuner
-        logger.info("Missing Tuner monsters for Synchro Summons - adding at least one Tuner")
-        
-        # Get DeckGenerator instance to access card clusters
+        logger.info("Missing Tuner monsters - adding one.")
         deck_gen = DeckGenerator.get_instance()
-        
-        # Find tuners in our card database
-        potential_tuners = []
-        for cluster_cards in deck_gen.monster_clusters.values():
-            for card in cluster_cards:
+        potential = []
+        for cards in deck_gen.monster_clusters.values():
+            for card in cards:
                 if is_tuner(card):
-                    potential_tuners.append(card)
-        
-        if potential_tuners:
-            # Choose a random tuner and add it to the main deck
-            tuner_to_add = random.choice(potential_tuners)
-            main_deck.append(tuner_to_add)
-            logger.info(f"Added Tuner monster: {tuner_to_add.get('name', 'Unknown')} (Level {get_monster_level(tuner_to_add)})")
+                    potential.append(card)
+        if potential:
+            main_deck.append(random.choice(potential))
             return True, main_deck
         else:
-            logger.warning("No Tuner monsters found in card database - cannot fix Synchro requirements")
+            logger.warning("No Tuners found in database.")
             return False, main_deck
 
 def validate_xyz_requirements(main_deck: List[Dict], extra_deck: List[Dict]) -> Tuple[bool, List[Dict]]:
     """
-    Validate and fix XYZ summoning requirements.
-    
-    If Extra Deck has XYZ monsters:
-    1. Ensure Main Deck has at least 2 monsters of the same level
-    2. Try to ensure those levels match the ranks of XYZ monsters
-    
-    Args:
-        main_deck: The main deck cards
-        extra_deck: The extra deck cards
-    
-    Returns:
-        Tuple of (requirements_met, updated_main_deck)
+    Validate and (soft-)fix XYZ summoning requirements.
     """
-    # Check if we have any XYZ monsters in the Extra Deck
     xyz_monsters = [card for card in extra_deck if card.get('type') and 'XYZ' in card.get('type')]
     if not xyz_monsters:
-        return True, main_deck  # No XYZ monsters, no need to validate
-    
-    # Get all monsters in the main deck
-    monsters = [card for card in main_deck if card.get('type') and 'Monster' in card.get('type')]
-    
-    # Count monsters by level
-    level_counts = Counter(get_monster_level(card) for card in monsters)
-    
-    # Check if we have at least 2 monsters of the same level
-    has_same_level = any(count >= 2 for level, count in level_counts.items() if level > 0)
-    
+        return True, main_deck
+    monsters = [card for card in main_deck if is_monster(card)]
+    level_counts = Counter(get_monster_level(c) for c in monsters)
+    has_same_level = any(cnt >= 2 for lvl, cnt in level_counts.items() if lvl > 0)
     if has_same_level:
-        logger.info("XYZ requirement met: Main Deck has monsters of the same level")
-        
-        # Check if levels match ranks of XYZ monsters (bonus requirement)
-        xyz_ranks = set(get_monster_level(card) for card in xyz_monsters)
-        matching_levels = any(level in xyz_ranks for level, count in level_counts.items() if count >= 2)
-        
-        if matching_levels:
-            logger.info("XYZ rank requirements met: Main Deck contains matching levels for XYZ Summons")
+        logger.info("XYZ requirement met: have at least one level pair.")
+        xyz_ranks = set(get_monster_level(c) for c in xyz_monsters)
+        if any(lvl in xyz_ranks and cnt >= 2 for lvl, cnt in level_counts.items()):
+            logger.info("XYZ rank match present.")
         else:
-            logger.info("XYZ ranks not matched exactly, but this is a soft requirement")
-            
+            logger.info("XYZ ranks not matched exactly (soft).")
         return True, main_deck
     else:
-        # We don't have enough monsters of the same level - fix by adding some
-        logger.info("Missing monsters of the same level for XYZ Summons - adding compatible monsters")
-        
-        # Get DeckGenerator instance to access card clusters
+        logger.info("Adding two monsters of common XYZ level to enable XYZ lines.")
         deck_gen = DeckGenerator.get_instance()
-        
-        # Get common XYZ ranks (typically 3, 4, 7, 8)
-        xyz_ranks = [get_monster_level(card) for card in xyz_monsters]
-        most_common_rank = Counter(xyz_ranks).most_common(1)[0][0] if xyz_ranks else 4  # Default to 4 if can't determine
-        
-        # Find monsters with matching level in our card database
-        matching_monsters = []
-        for cluster_cards in deck_gen.monster_clusters.values():
-            for card in cluster_cards:
+        xyz_ranks = [get_monster_level(c) for c in xyz_monsters]
+        most_common_rank = Counter(xyz_ranks).most_common(1)[0][0] if xyz_ranks else 4
+        pool = []
+        for cards in deck_gen.monster_clusters.values():
+            for card in cards:
                 if get_monster_level(card) == most_common_rank:
-                    matching_monsters.append(card)
-        
-        if matching_monsters:
-            # Choose at least 2 monsters with the desired level
-            monsters_to_add = random.sample(matching_monsters, min(2, len(matching_monsters)))
-            main_deck.extend(monsters_to_add)
-            logger.info(f"Added {len(monsters_to_add)} Level {most_common_rank} monsters to support XYZ Summons")
+                    pool.append(card)
+        if pool:
+            pick = random.sample(pool, min(2, len(pool)))
+            main_deck.extend(pick)
             return True, main_deck
         else:
-            logger.warning(f"No Level {most_common_rank} monsters found in card database - cannot fix XYZ requirements")
+            logger.warning(f"No Level {most_common_rank} monsters in database.")
             return False, main_deck
+
 def validate_link_requirements(main_deck: List[Dict], extra_deck: List[Dict]) -> Tuple[bool, List[Dict]]:
     """
-    Validate and fix Link summoning requirements.
-    
-    If Extra Deck has Link monsters:
-    1. Ensure Main Deck has enough monsters (at least 2) to serve as Link Materials
-    2. Optionally check Link arrows
-    
-    Args:
-        main_deck: The main deck cards
-        extra_deck: The extra deck cards
-    
-    Returns:
-        Tuple of (requirements_met, updated_main_deck)
+    Validate and (soft-)fix Link summoning requirements.
     """
-    # Check if we have any Link monsters in the Extra Deck
     link_monsters = [card for card in extra_deck if card.get('type') and 'Link' in card.get('type')]
     if not link_monsters:
-        return True, main_deck  # No Link monsters, no need to validate
-    
-    # Get all monsters in the main deck
-    monsters = [card for card in main_deck if card.get('type') and 'Monster' in card.get('type')]
-    
-    # For Link Summons, we need at least 2 monsters (for Link-1) and more for higher Link ratings
-    highest_link = max((card.get('linkval', 1) for card in link_monsters), default=1)
-    min_monsters_needed = min(highest_link + 1, 3)  # Need at least this many to make basic Link plays
-    
-    if len(monsters) >= min_monsters_needed:
-        logger.info(f"Link requirement met: Main Deck has {len(monsters)} monsters for Link Materials (needed {min_monsters_needed})")
+        return True, main_deck
+    monsters = [card for card in main_deck if is_monster(card)]
+    highest_link = max((get_monster_level(c) for c in link_monsters), default=1)
+    min_needed = min(highest_link + 1, 3)  # heuristic
+    if len(monsters) >= min_needed:
+        logger.info(f"Link requirement met: have {len(monsters)} monsters (need {min_needed}).")
         return True, main_deck
     else:
-        # We don't have enough monsters - add some generic ones
-        logger.info(f"Not enough monsters for Link Summons - adding {min_monsters_needed - len(monsters)} more monsters")
-        
-        # Get DeckGenerator instance to access card clusters
+        logger.info(f"Adding {min_needed - len(monsters)} more monsters for Link materials.")
         deck_gen = DeckGenerator.get_instance()
-        
-        # Find any monster cards in our database
-        additional_monsters = []
-        for cluster_cards in deck_gen.monster_clusters.values():
-            additional_monsters.extend(cluster_cards)
-        
-        if additional_monsters:
-            # Shuffle to get random monsters and select how many we need
-            random.shuffle(additional_monsters)
-            monsters_to_add = min_monsters_needed - len(monsters)
-            main_deck.extend(additional_monsters[:monsters_to_add])
-            
-            logger.info(f"Added {monsters_to_add} monsters to support Link Summons")
+        pool = []
+        for cards in deck_gen.monster_clusters.values():
+            pool.extend(cards)
+        if pool:
+            random.shuffle(pool)
+            need = min_needed - len(monsters)
+            main_deck.extend(pool[:need])
             return True, main_deck
         else:
-            logger.warning("No monster cards found in database - cannot fix Link requirements")
+            logger.warning("No monsters available to add for Link enablement.")
             return False, main_deck
+
 def validate_pendulum_requirements(main_deck: List[Dict]) -> Tuple[bool, List[Dict]]:
     """
-    Validate and fix Pendulum summoning requirements.
-    
-    If Main Deck has any Pendulum monsters:
-    1. Ensure there are at least 2 Pendulum cards (for setting scales)
-    2. Try to ensure the scales have different values
-    
-    Args:
-        main_deck: The main deck cards
-    
-    Returns:
-        Tuple of (requirements_met, updated_main_deck)
+    Validate and (soft-)fix Pendulum summoning requirements.
     """
-    # Check if we have any Pendulum monsters in the Main Deck
     pendulum_monsters = [card for card in main_deck if is_pendulum(card)]
     if not pendulum_monsters:
-        return True, main_deck  # No Pendulum monsters, no need to validate
-    
-    # For Pendulum Summons, ideally we want at least 2 Pendulum monsters with different scales
+        return True, main_deck
     if len(pendulum_monsters) >= 2:
-        # Check if we have different scales
         scales = set()
-        for card in pendulum_monsters:
-            left, right = get_pendulum_scales(card)
-            scales.add(left)
-            scales.add(right)
-        
+        for c in pendulum_monsters:
+            l, r = get_pendulum_scales(c)
+            scales.add(l); scales.add(r)
         if len(scales) >= 2:
-            logger.info(f"Pendulum requirement met: Main Deck has {len(pendulum_monsters)} Pendulum monsters with different scales")
+            logger.info("Pendulum requirement met (two scales).")
             return True, main_deck
         else:
-            logger.info(f"Pendulum monsters have identical scales, but we already have {len(pendulum_monsters)} Pendulum monsters (soft requirement)")
-            return True, main_deck  # Consider it a soft requirement
+            logger.info("Pendulum scales identical (soft).")
+            return True, main_deck
     else:
-        # We don't have enough pendulum monsters - add at least one more
-        logger.info("Not enough Pendulum monsters for Pendulum Summons - adding another Pendulum monster")
-        
-        # Get DeckGenerator instance to access card clusters
+        logger.info("Adding another Pendulum monster to establish scales.")
         deck_gen = DeckGenerator.get_instance()
-        
-        # Find pendulum monsters in our database
-        additional_pendulums = []
-        for cluster_cards in deck_gen.monster_clusters.values():
-            for card in cluster_cards:
+        existing_scales = set(s for p in pendulum_monsters for s in get_pendulum_scales(p))
+        pool = []
+        for cards in deck_gen.monster_clusters.values():
+            for card in cards:
                 if is_pendulum(card) and card not in pendulum_monsters:
-                    # Ideally find one with a different scale
-                    existing_scales = set(scale for pend in pendulum_monsters for scale in get_pendulum_scales(pend))
-                    new_scales = get_pendulum_scales(card)
-                    
-                    if new_scales[0] not in existing_scales or new_scales[1] not in existing_scales:
-                        additional_pendulums.append(card)
-        
-        # If we couldn't find pendulum cards with different scales, accept any pendulum card
-        if not additional_pendulums:
-            for cluster_cards in deck_gen.monster_clusters.values():
-                for card in cluster_cards:
+                    l, r = get_pendulum_scales(card)
+                    if l not in existing_scales or r not in existing_scales:
+                        pool.append(card)
+        if not pool:
+            for cards in deck_gen.monster_clusters.values():
+                for card in cards:
                     if is_pendulum(card) and card not in pendulum_monsters:
-                        additional_pendulums.append(card)
-        
-        if additional_pendulums:
-            # Add a pendulum monster to the deck
-            card_to_add = random.choice(additional_pendulums)
-            main_deck.append(card_to_add)
-            
-            logger.info(f"Added Pendulum monster: {card_to_add.get('name', 'Unknown')} with scales {get_pendulum_scales(card_to_add)}")
+                        pool.append(card)
+        if pool:
+            main_deck.append(random.choice(pool))
             return True, main_deck
         else:
-            logger.warning("No additional Pendulum monsters found in database - cannot fix Pendulum requirements")
-            return True, main_deck  # Return True anyway since it's more of a soft requirement
+            logger.warning("No additional Pendulum monsters found.")
+            return True, main_deck  # treat as soft
+
+
+# =========================
+# Utility: enforce copy cap & trimming
+# =========================
 
 def apply_max_copies_constraint(deck: List[Dict]) -> List[Dict]:
     """
     Ensure no card appears more than 3 times in the deck (Yu-Gi-Oh! core rule).
-    
-    Args:
-        deck: List of card dictionaries
-        
-    Returns:
-        Updated deck with no more than 3 copies of any card
     """
-    # Count occurrences of each card by name
     card_counts = Counter(card.get('name', '') for card in deck)
-    
-    # Identify cards exceeding 3 copies
-    excess_cards = {name: count for name, count in card_counts.items() if count > 3}
-    
-    if not excess_cards:
-        return deck  # No changes needed
-    
-    # Remove excess copies
+    excess = {name: count for name, count in card_counts.items() if count > 3}
+    if not excess:
+        return deck
     new_deck = []
-    current_counts = defaultdict(int)
-    
+    current = defaultdict(int)
     for card in deck:
-        card_name = card.get('name', '')
-        # Add card if we haven't hit the limit of 3 yet
-        if current_counts[card_name] < 3:
+        name = card.get('name','')
+        if current[name] < 3:
             new_deck.append(card)
-            current_counts[card_name] += 1
-    
-    logger.info(f"Removed {len(deck) - len(new_deck)} excess cards to enforce 3-copy limit")
+            current[name] += 1
+    removed = len(deck) - len(new_deck)
+    if removed > 0:
+        logger.info(f"Removed {removed} excess copies to enforce 3-copy limit.")
     return new_deck
 
-# Define SimpleDeckGenerator as an alias for DeckGenerator for backwards compatibility
+def trim_back_to_40(main_deck: List[Dict]) -> List[Dict]:
+    """
+    Trim to exactly 40 cards, preferring to keep key enablers (tuners, pendulums, monsters).
+    Heuristic: drop traps first, then non-archetype spells, then excess monsters (non-tuners).
+    """
+    if len(main_deck) <= 40:
+        return main_deck
+    # Partition by rough importance
+    tuners = [c for c in main_deck if is_tuner(c)]
+    pends  = [c for c in main_deck if is_pendulum(c)]
+    monsters = [c for c in main_deck if is_monster(c) and not is_tuner(c) and not is_pendulum(c)]
+    spells = [c for c in main_deck if is_spell(c)]
+    traps  = [c for c in main_deck if is_trap(c)]
+    # Removal order: traps -> spells -> monsters (non-tuner) -> pendulums -> tuners (last)
+    buckets = [traps, spells, monsters, pends, tuners]
+    keep = []
+    for b in buckets[::-1]:  # start from most important; build keep list
+        keep.extend(b)
+    # Now drop from the front of the least important (traps first)
+    target = 40
+    if len(main_deck) <= target:
+        return main_deck
+    # Rebuild in preferred order (tuners/pends/monsters/spells/traps)
+    preferred = tuners + pends + monsters + spells + traps
+    if len(preferred) <= target:
+        return preferred
+    # remove from the tail (least important end)
+    trimmed = preferred[:target]
+    return apply_max_copies_constraint(trimmed)
+
+
+def prune_unreachable_extra(extra_deck: List[Dict], keep_types: Set[str]) -> List[Dict]:
+    """
+    Remove Extra Deck cards whose type is NOT in keep_types.
+    keep_types is a set of strings like {'Fusion','XYZ','Link'}
+    """
+    out = []
+    for c in extra_deck:
+        t = c.get('type','')
+        keep = False
+        for kt in keep_types:
+            if kt in t:
+                keep = True
+                break
+        if keep:
+            out.append(c)
+    return out[:15]
+
+
+# =========================
+# Define alias for backwards compatibility
+# =========================
+
 SimpleDeckGenerator = DeckGenerator

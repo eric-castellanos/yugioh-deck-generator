@@ -11,6 +11,8 @@ import polars as pl
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+from src.utils.s3_utils import read_parquet_from_s3, upload_to_s3
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -19,22 +21,6 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
-
-def read_raw(path : str):
-    fs = s3fs.S3FileSystem(anon=False)
-
-    try:
-
-        logging.info("Reading raw data from S3")
-
-        # Load the Parquet file from S3
-        with fs.open(path, "rb") as f:
-            df = pl.read_csv(f)
-
-        return df
-    
-    except FileNotFoundError:
-        logging.exception(f"Error: The file '{path}' was not found.")
 
 def generate_eda_report(df):
     """Generate an EDA report and save it to a local file."""
@@ -54,32 +40,64 @@ def generate_eda_report(df):
 
         report.to_file(local_path)
         logging.info("EDA report generation complete")
-        return local_path
+        return local_path, filename
     except Exception as e:
         logging.exception("Failed to generate EDA report")
         raise
 
-def upload_eda_report_to_s3(local_path: str, bucket: str, prefix: str):
-    """Uploads the EDA report from local_path to S3."""
-    filename = os.path.basename(local_path)
-    month_str = datetime.today().strftime('%Y-%m')
-    s3_key = f"{prefix}/{month_str}/{filename}"
 
+def upload_eda_report_to_s3(local_path: str, filename: str, bucket: str = "yugioh-data"):
+    """Upload the generated EDA report to S3."""
     try:
-        logging.info(f"Uploading {local_path} to s3://{bucket}/{s3_key}")
-        s3 = boto3.client("s3")
-        s3.upload_file(local_path, bucket, s3_key)
+        # Read the HTML file as bytes
+        with open(local_path, 'rb') as f:
+            report_data = f.read()
+        
+        # Generate S3 key with current date
+        month_str = datetime.today().strftime('%Y-%m')
+        s3_key = f"reports/deck_scoring/{month_str}/{filename}"
+        
+        logging.info(f"Uploading EDA report to s3://{bucket}/{s3_key}")
+        
+        # Upload to S3 with proper content type for HTML
+        upload_to_s3(
+            bucket=bucket,
+            key=s3_key,
+            data=report_data,
+            content_type="text/html"
+        )
+        
         logging.info(f"Successfully uploaded EDA report to s3://{bucket}/{s3_key}")
-    except (BotoCoreError, ClientError) as e:
-        logging.exception(f"Failed to upload {local_path} to S3 bucket '{bucket}' with key '{s3_key}'")
+        
+        # Clean up local file
+        if os.path.exists(local_path):
+            os.remove(local_path)
+            logging.info(f"Cleaned up local file: {local_path}")
+            
+        return f"s3://{bucket}/{s3_key}"
+        
+    except Exception as e:
+        logging.exception("Failed to upload EDA report to S3")
         raise
 
 if __name__ == "__main__":
+    try:
+        # Load data from S3
+        logging.info("Loading data from S3...")
+        df = read_parquet_from_s3(
+            bucket="yugioh-data", 
+            key="processed/feature_engineered/deck_scoring/2025-08/feature_engineered.parquet"
+        )
+        logging.info(f"Loaded DataFrame with {df.height} rows and {df.width} columns")
 
-    # Example raw S3 file path
-    raw_s3_path = "s3://yugioh-data/deck_scoring/training_data/random_generated_decks_composite_data.csv"
-    df = read_raw(raw_s3_path)
-
-    # Generate and upload report
-    local_path = generate_eda_report(df)
-    upload_eda_report_to_s3(local_path, bucket="yugioh-data", prefix="reports")
+        # Generate EDA report
+        local_path, filename = generate_eda_report(df)
+        
+        # Upload report to S3
+        s3_path = upload_eda_report_to_s3(local_path, filename, bucket="yugioh-data")
+        
+        logging.info(f"EDA workflow completed successfully. Report available at: {s3_path}")
+        
+    except Exception as e:
+        logging.exception("EDA workflow failed")
+        sys.exit(1)
