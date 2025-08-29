@@ -12,6 +12,7 @@ This module provides simplified scoring functions for calculating various metric
 
 import math
 import numpy as np
+import pandas as pd
 from collections import Counter, defaultdict
 from typing import Dict, List, Any, Tuple, Optional
 
@@ -292,3 +293,104 @@ def create_card_to_cluster_mapping(clustered_cards: Dict[str, List[Dict]]) -> Di
                 card_to_cluster[name] = str_cluster_id
     
     return card_to_cluster
+
+
+def calculate_prior_probability(battle_results_df) -> float:
+    """
+    Calculate prior probability (p) from battle results data.
+    
+    This estimates the overall win rate across all decks and battles,
+    used as a Bayesian prior for win rate adjustment.
+    
+    Args:
+        battle_results_df: DataFrame with columns: deck_id, win_rate, successful_battles, total_battles
+        
+    Returns:
+        Prior probability (overall win rate across all data)
+    """
+    # Filter out failed battles
+    valid_results = battle_results_df[battle_results_df['win_rate'] != 'FAILED'].copy()
+    
+    if len(valid_results) == 0:
+        return 0.5  # Default to neutral prior if no valid data
+    
+    # Convert win_rate to numeric if it's not already
+    valid_results['win_rate'] = pd.to_numeric(valid_results['win_rate'], errors='coerce')
+    
+    # Remove any rows where conversion failed
+    valid_results = valid_results.dropna(subset=['win_rate'])
+    
+    if len(valid_results) == 0:
+        return 0.5
+    
+    # Calculate total duels won and total duels played
+    # Each successful battle consists of 6 duels
+    # duels_won = win_rate * 6 * successful_battles
+    # duels_played = 6 * successful_battles
+    valid_results['duels_won'] = valid_results['win_rate'] * 6 * valid_results['successful_battles']
+    valid_results['duels_played'] = 6 * valid_results['successful_battles']
+    
+    total_duels_won = valid_results['duels_won'].sum()
+    total_duels_played = valid_results['duels_played'].sum()
+    
+    if total_duels_played == 0:
+        return 0.5
+    
+    prior_probability = total_duels_won / total_duels_played
+    return prior_probability
+
+
+def add_bayesian_adjusted_win_rate(battle_results_df) -> None:
+    """
+    Add Bayesian adjusted win rate column to battle results DataFrame.
+    
+    Uses the formula:
+    adjusted_win_rate = (successful_battles * win_rate + p * total_battles) / (successful_battles + total_battles)
+    
+    Where p is the prior probability calculated from the entire dataset.
+    
+    Args:
+        battle_results_df: DataFrame with columns: deck_id, win_rate, successful_battles, total_battles
+                          Will be modified in place to add 'adjusted_win_rate' column
+    """
+    import pandas as pd
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    # Calculate prior probability from the dataset
+    p = calculate_prior_probability(battle_results_df)
+    logger.info(f"Calculated prior probability (p) = {p:.4f}")
+    
+    # Filter out failed battles for adjustment calculation
+    valid_mask = battle_results_df['win_rate'] != 'FAILED'
+    
+    # Initialize adjusted_win_rate column with original win_rate
+    battle_results_df['adjusted_win_rate'] = battle_results_df['win_rate']
+    
+    # Convert win_rate to numeric for valid rows
+    valid_results = battle_results_df[valid_mask].copy()
+    valid_results['win_rate_numeric'] = pd.to_numeric(valid_results['win_rate'], errors='coerce')
+    
+    # Remove rows where conversion failed
+    valid_numeric_mask = valid_results['win_rate_numeric'].notna()
+    valid_results = valid_results[valid_numeric_mask]
+    
+    if len(valid_results) == 0:
+        logger.warning("No valid data to adjust")
+        return  # No valid data to adjust
+    
+    # Calculate Bayesian adjusted win rate
+    # Formula: (successful_battles * win_rate + p * total_battles) / (successful_battles + total_battles)
+    numerator = (valid_results['successful_battles'] * valid_results['win_rate_numeric'] + 
+                p * valid_results['total_battles'])
+    denominator = valid_results['successful_battles'] + valid_results['total_battles']
+    
+    # Avoid division by zero
+    denominator = denominator.replace(0, 1)
+    
+    adjusted_win_rates = numerator / denominator
+    
+    # Update the original DataFrame
+    battle_results_df.loc[valid_results.index, 'adjusted_win_rate'] = adjusted_win_rates
+    logger.info(f"Applied Bayesian adjustment to {len(valid_results)} rows")
