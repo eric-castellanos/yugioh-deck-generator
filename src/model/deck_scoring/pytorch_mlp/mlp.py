@@ -24,20 +24,22 @@ from src.utils.mlflow.mlflow_utils import setup_experiment, log_params, log_metr
 MLP_WIDTHS = {
     "128-128-64": [128, 128, 64],    # default (back to original)
     "192-128-64": [192, 128, 64],    # wider first layer
+    "128-128-128-64": [128, 128, 128, 64],
 }
 
 # Simple settings that often boost rank stability
 NORM_TYPE = "batch"                   # back to BatchNorm for a crisper signal
-MODEL_ARCHITECTURE = "128-128-128"     # step back from wider net
+MODEL_ARCHITECTURE = "128-128-128-64"     #step back from wider net
 
 # RankNet parameters (slightly sharper + a bit more weight)
-RANKNET_WEIGHT = 0.30                  # give ranking a bit more say (try 0.25 next)
-RANKNET_TAU = 1.25                     # sharper than 2.0; try 0.5 next if needed
+RANKNET_WEIGHT = 0.25                  # give ranking a bit more say (try 0.25 next), 0.30
+RANKNET_TAU = 0.5                     # sharper than 2.0; try 0.5 next if needed
+# Ensure grid variables are None or lists, not booleans
 RANKNET_WEIGHT_GRID = None
 RANKNET_TAU_GRID = None
 
 # Experimental options
-USE_QUANTILE_SAMPLER = False           # stick to standard shuffling for stability
+USE_QUANTILE_SAMPLER = False           # stick to standard shuffling for stability, switch back to False
 HARD_PAIRS_ONLY = False                # OFF for now; can prune useful pairs otherwise
 HARD_GAP_RANGE = (0.03, 0.25)
 WEIGHT_RANKNET_BY_BATTLE_WEIGHTS = False # True
@@ -46,8 +48,8 @@ USE_ADAPTIVE_WEIGHTS = True           # OFF: can overweight extremes
 # Training parameters
 NUM_EPOCHS = 450 #350
 PATIENCE = 35
-LEARNING_RATE = 1e-2
-DROPOUT_RATE = 0.20
+LEARNING_RATE = 7e-3
+DROPOUT_RATE = 0.25 # 0.20
 WEIGHT_DECAY = 1e-4
 LOG_EVERY = 5
 
@@ -71,18 +73,15 @@ def create_model(num_features: int, architecture: str = MODEL_ARCHITECTURE, drop
         hidden_layers = MLP_WIDTHS["128-128-64"]
     return DeckScoringMLP(num_features, hidden_layers, dropout_rate, norm_type=NORM_TYPE)
 
-
 def ranknet_weight_schedule(epoch: int, max_epochs: int) -> float:
-    """RankNet weight scheduling: 0.2 → cosine down → 0.1 (kept for grid mode)"""
-    progress = epoch / max_epochs
-    if progress <= 0.4:
-        return 0.2
-    elif progress <= 0.8:
-        cosine_progress = (progress - 0.4) / 0.4
-        return 0.2 - 0.1 * (1 + math.cos(math.pi * cosine_progress)) / 2
+    p = epoch / max_epochs
+    if p <= 0.5:
+        return 0.25            # early balance
+    elif p <= 0.85:
+        cp = (p - 0.5) / 0.35
+        return 0.25 - 0.10 * (1 + math.cos(math.pi * cp)) / 2   # 0.25 → 0.15
     else:
-        return 0.1
-
+        return 0.30            # reheat ranking for the finish
 
 class QuantileMixSampler(Sampler):
     """Samples batches mixing low/mid/high quantiles of target values"""
@@ -172,6 +171,40 @@ class DeckScoringMLP(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
+# def ranknet_loss(scores, y, tau=1.0, hard_pairs_only=False,
+#                  hard_gap_range=(0.02, 0.3), sample_weights=None):
+#     s = scores.squeeze()
+#     t = y.squeeze()
+
+#     D = (s.unsqueeze(1) - s.unsqueeze(0)) / tau
+#     P = (t.unsqueeze(1) > t.unsqueeze(0)).float()
+
+#     B = t.shape[0]
+#     triu = torch.triu(torch.ones(B, B, device=t.device, dtype=torch.bool), diagonal=1)
+
+#     # NEW: filter out ties & near-ties
+#     gap = torch.abs(t.unsqueeze(1) - t.unsqueeze(0))
+#     tie_mask = gap < 1e-6            # exact ties
+#     tiny_mask = gap < 0.01           # near-ties (tune)
+#     base_mask = triu & (~tie_mask) & (~tiny_mask)
+
+#     if hard_pairs_only:
+#         target_diffs = gap
+#         hard_mask = (target_diffs >= hard_gap_range[0]) & (target_diffs <= hard_gap_range[1]) & base_mask
+#         if hard_mask.any():
+#             if sample_weights is not None:
+#                 pair_w = ((sample_weights.unsqueeze(1) + sample_weights.unsqueeze(0)) / 2.0)
+#                 W = pair_w[hard_mask]
+#                 return F.binary_cross_entropy_with_logits(D[hard_mask], P[hard_mask], weight=W)
+#             return F.binary_cross_entropy_with_logits(D[hard_mask], P[hard_mask])
+
+#     # Default path
+#     mask = base_mask
+#     if sample_weights is not None:
+#         pair_w = ((sample_weights.unsqueeze(1) + sample_weights.unsqueeze(0)) / 2.0)
+#         W = pair_w[mask]
+#         return F.binary_cross_entropy_with_logits(D[mask], P[mask], weight=W)
+#     return F.binary_cross_entropy_with_logits(D[mask], P[mask])
 
 def ranknet_loss(scores: torch.Tensor,
                  y: torch.Tensor,
@@ -179,30 +212,46 @@ def ranknet_loss(scores: torch.Tensor,
                  hard_pairs_only: bool = False,
                  hard_gap_range: Tuple[float, float] = (0.02, 0.3),
                  sample_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
-    """RankNet loss using only i<j pairs, optional hard-pair filtering and pairwise weights."""
+    """RankNet loss using only i<j pairs, with tie/near-tie masking and optional gap weighting."""
     s = scores.squeeze()
     t = y.squeeze()
 
-    D = (s.unsqueeze(1) - s.unsqueeze(0)) / tau            # [B,B]
-    P = (t.unsqueeze(1) > t.unsqueeze(0)).float()           # [B,B]
+    D = (s.unsqueeze(1) - s.unsqueeze(0)) / tau            # [B,B] logit margins
+    P = (t.unsqueeze(1) > t.unsqueeze(0)).float()          # [B,B] pair targets
 
     B = t.shape[0]
     triu = torch.triu(torch.ones(B, B, device=t.device, dtype=torch.bool), diagonal=1)
 
-    if hard_pairs_only:
-        target_diffs = torch.abs(t.unsqueeze(1) - t.unsqueeze(0))
-        hard_mask = (target_diffs >= hard_gap_range[0]) & (target_diffs <= hard_gap_range[1]) & triu
-        if hard_mask.any():
-            if sample_weights is not None:
-                W = ((sample_weights.unsqueeze(1) + sample_weights.unsqueeze(0)) / 2.0)[hard_mask]
-                return F.binary_cross_entropy_with_logits(D[hard_mask], P[hard_mask], weight=W)
-            return F.binary_cross_entropy_with_logits(D[hard_mask], P[hard_mask])
+    # --- NEW: filter ties & near-ties to reduce label noise ---
+    gap = torch.abs(t.unsqueeze(1) - t.unsqueeze(0))
+    TIE_EPS = 1e-6
+    TINY_THRESH = 0.01  # tune 0.005–0.02
+    base_mask = triu & (gap >= TIE_EPS) & (gap >= TINY_THRESH)
 
-    mask = triu
+    if hard_pairs_only:
+        hard_mask = (gap >= hard_gap_range[0]) & (gap <= hard_gap_range[1]) & base_mask
+        if hard_mask.any():
+            # --- NEW: gap-weighting (optional but recommended) ---
+            if sample_weights is not None:
+                pair_w = ((sample_weights.unsqueeze(1) + sample_weights.unsqueeze(0)) / 2.0)
+            else:
+                pair_w = torch.ones_like(D)
+            ALPHA = 2.0  # tune 1.0–3.0
+            pair_w = pair_w * (1.0 + ALPHA * gap)
+            W = pair_w[hard_mask]
+            return F.binary_cross_entropy_with_logits(D[hard_mask], P[hard_mask], weight=W)
+        # If no hard pairs, fall through to default mask
+
+    mask = base_mask
     if sample_weights is not None:
-        W = ((sample_weights.unsqueeze(1) + sample_weights.unsqueeze(0)) / 2.0)[mask]
-        return F.binary_cross_entropy_with_logits(D[mask], P[mask], weight=W)
-    return F.binary_cross_entropy_with_logits(D[mask], P[mask])
+        pair_w = ((sample_weights.unsqueeze(1) + sample_weights.unsqueeze(0)) / 2.0)
+    else:
+        pair_w = torch.ones_like(D)
+    # --- NEW: gap-weighting (optional but recommended) ---
+    ALPHA = 2.0  # tune 1.0–3.0
+    pair_w = pair_w * (1.0 + ALPHA * gap)
+    W = pair_w[mask]
+    return F.binary_cross_entropy_with_logits(D[mask], P[mask], weight=W)
 
 
 def compute_adaptive_weights(battle_weights: torch.Tensor,
@@ -349,6 +398,21 @@ def _train_model_core(model,
 
         scheduler.step(val_loss)
 
+        # inside _train_model_core, after computing val_spearman/val_mae/val_loss
+        if epoch == 0:
+            best_spearman = -1.0
+            best_state_by_spearman = None
+
+        if val_spearman > best_spearman:
+            best_spearman = val_spearman
+            best_state_by_spearman = {
+                "state_dict": {k: v.detach().cpu().clone() for k, v in model.state_dict().items()},
+                "metrics": {"rmse": val_rmse, "mae": val_mae, "spearman": val_spearman},
+                "val_preds": val_preds_np,
+                "val_targets": val_targets_np,
+                "val_weights": val_weights_np
+            }
+
         # Early stopping (track best epoch's predictions for calibration)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -398,6 +462,17 @@ def _train_model_core(model,
             input_example=input_example
         )
 
+    if best_state_by_spearman and best_state_by_spearman["metrics"]["spearman"] > best_metrics.get("spearman", -1):
+        model.load_state_dict(best_state_by_spearman["state_dict"])
+        best_metrics.update(best_state_by_spearman["metrics"])
+        # ensure calibration has data from the chosen checkpoint
+        best_metrics["val_preds"] = best_state_by_spearman["val_preds"]
+        best_metrics["val_targets"] = best_state_by_spearman["val_targets"]
+        best_metrics["val_weights"] = best_state_by_spearman["val_weights"]
+        best_metrics["selected_by"] = "spearman"
+    else:
+        best_metrics["selected_by"] = "mae"
+
     return best_metrics
 
 
@@ -440,48 +515,52 @@ def detect_leakage(train_dataset, val_dataset, preprocessor):
 def run_grid_search():
     from .Dataset import create_cv_splits_no_leakage
 
+
     weight_grid = RANKNET_WEIGHT_GRID if RANKNET_WEIGHT_GRID is not None else [RANKNET_WEIGHT] if (RANKNET_WEIGHT is not None) else [None]
     tau_grid = RANKNET_TAU_GRID if RANKNET_TAU_GRID is not None else [RANKNET_TAU]
+    dropout_grid = [0.1, 0.2, 0.3, 0.4, 0.5]
 
     results = []
     for weight in weight_grid:
         for tau in tau_grid:
-            print(f"🔬 GRID SEARCH: weight={weight}, tau={tau}")
-            splits = create_cv_splits_no_leakage(use_pca=False, n_splits=3)
-            fold_metrics = []
-            for fold, (train_dataset, val_dataset, preprocessor) in enumerate(splits):
-                if USE_QUANTILE_SAMPLER:
-                    train_sampler = QuantileMixSampler(train_dataset.y, batch_size=32)
-                    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler)
-                else:
-                    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-                val_loader = DataLoader(val_dataset, batch_size=32)
+            for dropout_rate in dropout_grid:
+                print(f"🔬 GRID SEARCH: weight={weight}, tau={tau}, dropout={dropout_rate}")
+                splits = create_cv_splits_no_leakage(use_pca=False, n_splits=3)
+                fold_metrics = []
+                for fold, (train_dataset, val_dataset, preprocessor) in enumerate(splits):
+                    if USE_QUANTILE_SAMPLER:
+                        train_sampler = QuantileMixSampler(train_dataset.y, batch_size=32)
+                        train_loader = DataLoader(train_dataset, batch_sampler=train_sampler)
+                    else:
+                        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+                    val_loader = DataLoader(val_dataset, batch_size=32)
 
-                model = create_model(num_features=train_dataset.X.shape[1],
-                                     architecture=MODEL_ARCHITECTURE,
-                                     dropout_rate=DROPOUT_RATE)
+                    model = create_model(num_features=train_dataset.X.shape[1],
+                                         architecture=MODEL_ARCHITECTURE,
+                                         dropout_rate=dropout_rate)
 
-                metrics = train_model(model=model,
-                                      train_loader=train_loader,
-                                      val_loader=val_loader,
-                                      experiment_name="deck_scoring_model",
-                                      num_epochs=NUM_EPOCHS,
-                                      patience=PATIENCE,
-                                      ranknet_weight=weight,
-                                      ranknet_tau=tau,
-                                      log_to_mlflow=False)
-                fold_metrics.append(metrics)
+                    metrics = train_model(model=model,
+                                          train_loader=train_loader,
+                                          val_loader=val_loader,
+                                          experiment_name="deck_scoring_model",
+                                          num_epochs=NUM_EPOCHS,
+                                          patience=PATIENCE,
+                                          ranknet_weight=weight,
+                                          ranknet_tau=tau,
+                                          log_to_mlflow=False)
+                    fold_metrics.append(metrics)
 
-            avg_metrics = {
-                "ranknet_weight": weight if weight is not None else "scheduled",
-                "ranknet_tau": tau,
-                "val_spearman": float(np.mean([m['spearman'] for m in fold_metrics])),
-                "val_mae_raw": float(np.mean([m.get('mae_raw', m['mae']) for m in fold_metrics])),
-                "val_rmse_raw": float(np.mean([m.get('rmse_raw', m['rmse']) for m in fold_metrics])),
-                "val_mae_cal": float(np.mean([m.get('mae_cal', m.get('mae_raw', m['mae'])) for m in fold_metrics])),
-                "val_rmse_cal": float(np.mean([m.get('rmse_cal', m.get('rmse_raw', m['rmse'])) for m in fold_metrics])),
-            }
-            results.append(avg_metrics)
+                avg_metrics = {
+                    "ranknet_weight": weight if weight is not None else "scheduled",
+                    "ranknet_tau": tau,
+                    "dropout_rate": dropout_rate,
+                    "val_spearman": float(np.mean([m['spearman'] for m in fold_metrics])),
+                    "val_mae_raw": float(np.mean([m.get('mae_raw', m['mae']) for m in fold_metrics])),
+                    "val_rmse_raw": float(np.mean([m.get('rmse_raw', m['rmse']) for m in fold_metrics])),
+                    "val_mae_cal": float(np.mean([m.get('mae_cal', m.get('mae_raw', m['mae'])) for m in fold_metrics])),
+                    "val_rmse_cal": float(np.mean([m.get('rmse_cal', m.get('rmse_raw', m['rmse'])) for m in fold_metrics])),
+                }
+                results.append(avg_metrics)
 
     results.sort(key=lambda x: (-x['val_spearman'], x['val_mae_cal']))
 
