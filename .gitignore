@@ -10,3 +10,4 @@
 *.onnx
 *.parquet
 data/
+docs/
