@@ -1,0 +1,12 @@
+*.sh
+*.iso
+*.zip
+*.tar
+*.tar.gz
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.parquet
+data/
