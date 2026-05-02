@@ -10,9 +10,7 @@ import pandas as pd
 import psycopg
 from psycopg import sql
 
-LOG_FORMAT = (
-    "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
-)
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
@@ -205,7 +203,9 @@ def create_tables(conn: psycopg.Connection[Any], schema: str) -> None:
         )
 
 
-def truncate_tables(conn: psycopg.Connection[Any], schema: str, tables_to_truncate: list[str]) -> None:
+def truncate_tables(
+    conn: psycopg.Connection[Any], schema: str, tables_to_truncate: list[str]
+) -> None:
     ordered_tables = [
         "card_images",
         "card_sets",
@@ -233,7 +233,9 @@ def truncate_tables(conn: psycopg.Connection[Any], schema: str, tables_to_trunca
         cur.execute(sql.SQL("TRUNCATE TABLE {}").format(sql.SQL(", ").join(table_refs)))
 
 
-def insert_dataframe(conn: psycopg.Connection[Any], schema: str, table: str, df: pd.DataFrame) -> None:
+def insert_dataframe(
+    conn: psycopg.Connection[Any], schema: str, table: str, df: pd.DataFrame
+) -> None:
     if df.empty:
         logger.info("Skipping %s: no rows", table)
         return

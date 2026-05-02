@@ -79,4 +79,3 @@ class BanlistInfoRow(BaseModel):
     ban_ocg: str | None = None
     ban_goat: str | None = None
     ban_edison: str | None = None
-
