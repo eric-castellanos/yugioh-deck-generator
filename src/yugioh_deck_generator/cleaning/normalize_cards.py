@@ -12,7 +12,6 @@ from yugioh_deck_generator.cleaning.schemas import (
     BanlistInfoRow,
     CardArchetypeRow,
     CardImageRow,
-    CardMiscInfoRow,
     CardPriceRow,
     CardRow,
     CardSetRow,
@@ -67,10 +66,12 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]
     price_rows: list[dict[str, Any]] = []
     archetype_rows: list[dict[str, Any]] = []
     banlist_rows: list[dict[str, Any]] = []
-    misc_info_rows: list[dict[str, Any]] = []
 
     for card in cards:
         card_id = int(card["id"])
+        misc_info = card.get("misc_info", [])
+        misc = misc_info[0] if isinstance(misc_info, list) and misc_info else {}
+        formats = misc.get("formats") if isinstance(misc, dict) else None
 
         card_row = CardRow(
             id=card_id,
@@ -86,6 +87,17 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]
             attribute=card.get("attribute"),
             scale=card.get("scale"),
             linkval=card.get("linkval"),
+            beta_name=misc.get("beta_name") if isinstance(misc, dict) else None,
+            views=misc.get("views") if isinstance(misc, dict) else None,
+            viewsweek=misc.get("viewsweek") if isinstance(misc, dict) else None,
+            upvotes=misc.get("upvotes") if isinstance(misc, dict) else None,
+            downvotes=misc.get("downvotes") if isinstance(misc, dict) else None,
+            formats="|".join(formats) if isinstance(formats, list) else None,
+            tcg_date=misc.get("tcg_date") if isinstance(misc, dict) else None,
+            ocg_date=misc.get("ocg_date") if isinstance(misc, dict) else None,
+            konami_id=misc.get("konami_id") if isinstance(misc, dict) else None,
+            has_effect=misc.get("has_effect") if isinstance(misc, dict) else None,
+            md_rarity=misc.get("md_rarity") if isinstance(misc, dict) else None,
         )
         card_rows.append(
             {
@@ -102,6 +114,17 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                 "attribute": card_row.attribute,
                 "scale": card_row.scale,
                 "linkval": card_row.linkval,
+                "beta_name": card_row.beta_name,
+                "views": card_row.views,
+                "viewsweek": card_row.viewsweek,
+                "upvotes": card_row.upvotes,
+                "downvotes": card_row.downvotes,
+                "formats": card_row.formats,
+                "tcg_date": card_row.tcg_date,
+                "ocg_date": card_row.ocg_date,
+                "konami_id": card_row.konami_id,
+                "has_effect": card_row.has_effect,
+                "md_rarity": card_row.md_rarity,
             }
         )
 
@@ -154,25 +177,6 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                 ).model_dump()
             )
 
-        for misc in card.get("misc_info", []):
-            formats = misc.get("formats")
-            misc_info_rows.append(
-                CardMiscInfoRow(
-                    card_id=card_id,
-                    beta_name=misc.get("beta_name"),
-                    views=misc.get("views"),
-                    viewsweek=misc.get("viewsweek"),
-                    upvotes=misc.get("upvotes"),
-                    downvotes=misc.get("downvotes"),
-                    formats="|".join(formats) if isinstance(formats, list) else None,
-                    tcg_date=misc.get("tcg_date"),
-                    ocg_date=misc.get("ocg_date"),
-                    konami_id=misc.get("konami_id"),
-                    has_effect=misc.get("has_effect"),
-                    md_rarity=misc.get("md_rarity"),
-                ).model_dump()
-            )
-
     return {
         "cards": card_rows,
         "card_images": image_rows,
@@ -180,7 +184,6 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]
         "card_prices": price_rows,
         "card_archetypes": archetype_rows,
         "banlist_info": banlist_rows,
-        "card_misc_info": misc_info_rows,
     }
 
 

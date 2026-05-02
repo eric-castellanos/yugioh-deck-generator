@@ -19,6 +19,17 @@ class CardRow(BaseModel):
     attribute: str | None = None
     scale: int | None = None
     linkval: int | None = None
+    beta_name: str | None = None
+    views: int | None = None
+    viewsweek: int | None = None
+    upvotes: int | None = None
+    downvotes: int | None = None
+    formats: str | None = None
+    tcg_date: str | None = None
+    ocg_date: str | None = None
+    konami_id: int | None = None
+    has_effect: int | None = None
+    md_rarity: str | None = None
 
 
 class CardImageRow(BaseModel):
@@ -69,19 +80,3 @@ class BanlistInfoRow(BaseModel):
     ban_goat: str | None = None
     ban_edison: str | None = None
 
-
-class CardMiscInfoRow(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    card_id: int
-    beta_name: str | None = None
-    views: int | None = None
-    viewsweek: int | None = None
-    upvotes: int | None = None
-    downvotes: int | None = None
-    formats: str | None = None
-    tcg_date: str | None = None
-    ocg_date: str | None = None
-    konami_id: int | None = None
-    has_effect: int | None = None
-    md_rarity: str | None = None
