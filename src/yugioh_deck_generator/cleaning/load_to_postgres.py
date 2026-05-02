@@ -74,14 +74,11 @@ def _df_from_parquet(processed_dir: Path, table_name: str) -> pd.DataFrame:
     if not table_path.exists():
         raise FileNotFoundError(f"Missing parquet table: {table_path}")
 
-    df = pd.read_parquet(table_path)
-    # Convert pandas NaN/NaT values into DB-friendly None.
-    return df.where(pd.notnull(df), None)
+    return pd.read_parquet(table_path)
 
 
 def _df_from_target_file(target_path: Path) -> pd.DataFrame:
-    df = pd.read_parquet(target_path)
-    return df.where(pd.notnull(df), None)
+    return pd.read_parquet(target_path)
 
 
 def create_tables(conn: psycopg.Connection[Any], schema: str) -> None:
