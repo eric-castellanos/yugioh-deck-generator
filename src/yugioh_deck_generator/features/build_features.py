@@ -8,24 +8,29 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import psycopg
 
+Decorator = Callable[..., Any]
+step: Decorator
+pipeline: Decorator
+
 try:
-    from zenml import pipeline, step
+    from zenml import pipeline as _zenml_pipeline
+    from zenml import step as _zenml_step
+    step = _zenml_step
+    pipeline = _zenml_pipeline
 except ImportError:  # pragma: no cover
 
-    def step(func: Any | None = None, **_: Any) -> Any:
+    def _identity_decorator(func: Any | None = None, **_: Any) -> Any:
         if func is None:
             return lambda inner: inner
         return func
 
-    def pipeline(func: Any | None = None, **_: Any) -> Any:
-        if func is None:
-            return lambda inner: inner
-        return func
+    step = _identity_decorator
+    pipeline = _identity_decorator
 
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
@@ -132,7 +137,9 @@ def _load_sentence_transformer(cache_dir: str | None = None) -> Any:
     return _EMBEDDING_MODEL_INSTANCE
 
 
-def _model_embeddings(texts: list[str], embedding_cache_dir: str | None = None) -> tuple[list[list[float]], int]:
+def _model_embeddings(
+    texts: list[str], embedding_cache_dir: str | None = None
+) -> tuple[list[list[float]], int]:
     try:
         model = _load_sentence_transformer(cache_dir=embedding_cache_dir)
         vectors = model.encode(texts, normalize_embeddings=True).tolist()
