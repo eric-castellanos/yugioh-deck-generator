@@ -20,6 +20,7 @@ packages = [{ include = "yugioh_deck_generator", from = "src" }]
 pytest = "^8.3.0"
 ruff = "^0.11.0"
 black = "^25.1.0"
+mypy = "^1.11.0"
 
 [tool.black]
 line-length = 100
@@ -31,6 +32,19 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+pretty = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_return_any = false
+warn_unused_configs = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["psycopg", "psycopg.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
