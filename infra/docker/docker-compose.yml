@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: yugioh-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yugioh}
+      POSTGRES_USER: ${POSTGRES_USER:-yugioh}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-yugioh}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-yugioh} -d ${POSTGRES_DB:-yugioh}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
