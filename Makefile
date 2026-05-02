@@ -1,4 +1,4 @@
-.PHONY: install lint format test check fetch-cards
+.PHONY: install lint format test check fetch-cards normalize-cards
 
 install:
 	poetry install
@@ -16,5 +16,8 @@ test:
 
 fetch-cards:
 	poetry run python -m yugioh_deck_generator.data_collection.fetch_ygoprodeck_cards
+
+normalize-cards:
+	poetry run python -m yugioh_deck_generator.data.normalize_cards
 
 check: lint test

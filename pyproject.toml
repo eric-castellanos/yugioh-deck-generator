@@ -8,6 +8,8 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
   "fastapi>=0.116.0,<0.117.0",
   "pydantic>=2.11.0,<3.0.0",
+  "pandas>=2.2.0,<3.0.0",
+  "pyarrow>=16.0.0,<20.0.0",
 ]
 
 [tool.poetry]
