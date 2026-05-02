@@ -10,9 +10,7 @@ from urllib.request import Request, urlopen
 
 API_URL = "https://db.ygoprodeck.com/api/v7/cardinfo.php?misc=yes"
 DEFAULT_TIMEOUT_SECONDS = 60
-LOG_FORMAT = (
-    "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
-)
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "

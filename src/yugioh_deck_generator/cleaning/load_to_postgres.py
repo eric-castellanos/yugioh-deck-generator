@@ -10,9 +10,7 @@ import pandas as pd
 import psycopg
 from psycopg import sql
 
-LOG_FORMAT = (
-    "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
-)
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
@@ -76,14 +74,11 @@ def _df_from_parquet(processed_dir: Path, table_name: str) -> pd.DataFrame:
     if not table_path.exists():
         raise FileNotFoundError(f"Missing parquet table: {table_path}")
 
-    df = pd.read_parquet(table_path)
-    # Convert pandas NaN/NaT values into DB-friendly None.
-    return df.where(pd.notnull(df), None)
+    return pd.read_parquet(table_path)
 
 
 def _df_from_target_file(target_path: Path) -> pd.DataFrame:
-    df = pd.read_parquet(target_path)
-    return df.where(pd.notnull(df), None)
+    return pd.read_parquet(target_path)
 
 
 def create_tables(conn: psycopg.Connection[Any], schema: str) -> None:
@@ -205,7 +200,9 @@ def create_tables(conn: psycopg.Connection[Any], schema: str) -> None:
         )
 
 
-def truncate_tables(conn: psycopg.Connection[Any], schema: str, tables_to_truncate: list[str]) -> None:
+def truncate_tables(
+    conn: psycopg.Connection[Any], schema: str, tables_to_truncate: list[str]
+) -> None:
     ordered_tables = [
         "card_images",
         "card_sets",
@@ -233,7 +230,9 @@ def truncate_tables(conn: psycopg.Connection[Any], schema: str, tables_to_trunca
         cur.execute(sql.SQL("TRUNCATE TABLE {}").format(sql.SQL(", ").join(table_refs)))
 
 
-def insert_dataframe(conn: psycopg.Connection[Any], schema: str, table: str, df: pd.DataFrame) -> None:
+def insert_dataframe(
+    conn: psycopg.Connection[Any], schema: str, table: str, df: pd.DataFrame
+) -> None:
     if df.empty:
         logger.info("Skipping %s: no rows", table)
         return
@@ -344,7 +343,10 @@ def validate_integrity(conn: psycopg.Connection[Any], schema: str) -> None:
                 sql.Identifier(fk_col),
             )
             cur.execute(query)
-            orphan_count = cur.fetchone()[0]
+            orphan_row = cur.fetchone()
+            if orphan_row is None:
+                raise RuntimeError(f"No result returned for integrity check on {table}")
+            orphan_count = orphan_row[0]
             if orphan_count != 0:
                 raise ValueError(f"Integrity check failed for {table}: {orphan_count} orphan rows")
 
@@ -358,7 +360,10 @@ def log_row_counts(conn: psycopg.Connection[Any], schema: str) -> None:
                     sql.Identifier(table),
                 )
             )
-            count = cur.fetchone()[0]
+            count_row = cur.fetchone()
+            if count_row is None:
+                raise RuntimeError(f"No result returned for row count on {table}")
+            count = count_row[0]
             logger.info("Row count %s.%s = %s", schema, table, count)
 
 

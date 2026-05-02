@@ -17,9 +17,7 @@ from yugioh_deck_generator.cleaning.schemas import (
     CardSetRow,
 )
 
-LOG_FORMAT = (
-    "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
-)
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
@@ -28,11 +26,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Normalize YGOPRODeck raw JSON into structured Parquet tables."
     )
-    parser.add_argument("--raw-dir", default="data/raw", help="Directory containing raw JSON files.")
+    parser.add_argument(
+        "--raw-dir",
+        default="data/raw",
+        help="Directory containing raw JSON files.",
+    )
     parser.add_argument(
         "--input-file",
         default=None,
-        help="Optional path to a specific raw JSON file. If omitted, latest file in raw-dir is used.",
+        help=(
+            "Optional path to a specific raw JSON file. "
+            "If omitted, latest file in raw-dir is used."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -129,7 +134,9 @@ def normalize_payload(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]
         )
 
         if card.get("archetype"):
-            archetype_rows.append(CardArchetypeRow(card_id=card_id, archetype=card["archetype"]).model_dump())
+            archetype_rows.append(
+                CardArchetypeRow(card_id=card_id, archetype=card["archetype"]).model_dump()
+            )
 
         for image in card.get("card_images", []):
             image_rows.append(

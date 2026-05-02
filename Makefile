@@ -1,4 +1,4 @@
-.PHONY: install lint format test check fetch-cards normalize-cards postgres-up postgres-down load-cards append-cards phase1-pipeline
+.PHONY: install lint format test typecheck check fetch-cards normalize-cards postgres-up postgres-down load-cards append-cards phase1-pipeline
 
 install:
 	poetry install
@@ -13,6 +13,9 @@ format:
 
 test:
 	poetry run pytest -q
+
+typecheck:
+	poetry run mypy src
 
 fetch-cards:
 	poetry run python -m yugioh_deck_generator.data_collection.fetch_ygoprodeck_cards
@@ -35,4 +38,4 @@ append-cards:
 
 phase1-pipeline: normalize-cards load-cards
 
-check: lint test
+check: lint typecheck test
