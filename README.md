@@ -17,4 +17,11 @@ poetry install
 make lint
 make format
 make test
+make fetch-cards
+make normalize-cards
+make postgres-up
+make load-cards
+make append-cards TARGET_FILE=data/processed/cards.parquet
+make phase1-pipeline
+make postgres-down
 ```
