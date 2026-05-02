@@ -19,7 +19,6 @@ def test_normalize_payload_shapes_and_counts() -> None:
         "card_prices",
         "card_archetypes",
         "banlist_info",
-        "card_misc_info",
     }
 
     assert len(tables["cards"]) == 2
@@ -28,14 +27,11 @@ def test_normalize_payload_shapes_and_counts() -> None:
     assert len(tables["card_prices"]) == 1
     assert len(tables["card_archetypes"]) == 1
     assert len(tables["banlist_info"]) == 1
-    assert len(tables["card_misc_info"]) == 1
 
     first_card = tables["cards"][0]
     assert first_card["id"] == 123
     assert first_card["name"] == "Test Dragon"
     assert first_card["def"] == 2000
     assert "def_" not in first_card
-
-    misc_info = tables["card_misc_info"][0]
-    assert misc_info["card_id"] == 123
-    assert misc_info["formats"] == "TCG|OCG|Master Duel"
+    assert first_card["formats"] == "TCG|OCG|Master Duel"
+    assert first_card["views"] == 1000
