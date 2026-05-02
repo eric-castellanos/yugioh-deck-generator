@@ -346,7 +346,10 @@ def validate_integrity(conn: psycopg.Connection[Any], schema: str) -> None:
                 sql.Identifier(fk_col),
             )
             cur.execute(query)
-            orphan_count = cur.fetchone()[0]
+            orphan_row = cur.fetchone()
+            if orphan_row is None:
+                raise RuntimeError(f"No result returned for integrity check on {table}")
+            orphan_count = orphan_row[0]
             if orphan_count != 0:
                 raise ValueError(f"Integrity check failed for {table}: {orphan_count} orphan rows")
 
@@ -360,7 +363,10 @@ def log_row_counts(conn: psycopg.Connection[Any], schema: str) -> None:
                     sql.Identifier(table),
                 )
             )
-            count = cur.fetchone()[0]
+            count_row = cur.fetchone()
+            if count_row is None:
+                raise RuntimeError(f"No result returned for row count on {table}")
+            count = count_row[0]
             logger.info("Row count %s.%s = %s", schema, table, count)
 
 
