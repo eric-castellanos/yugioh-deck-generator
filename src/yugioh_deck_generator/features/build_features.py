@@ -21,6 +21,7 @@ pipeline: Decorator
 try:
     from zenml import pipeline as _zenml_pipeline
     from zenml import step as _zenml_step
+
     step = _zenml_step
     pipeline = _zenml_pipeline
 except ImportError:  # pragma: no cover
