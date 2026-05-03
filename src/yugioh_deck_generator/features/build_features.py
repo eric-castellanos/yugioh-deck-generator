@@ -6,9 +6,10 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 import psycopg
