@@ -10,8 +10,10 @@ dependencies = [
   "pydantic>=2.11.0,<3.0.0",
   "pandas>=2.2.0,<3.0.0",
   "pyarrow>=16.0.0,<20.0.0",
+  "python-dotenv>=1.0.0,<2.0.0",
   "psycopg[binary]>=3.2.0,<4.0.0",
   "redis>=5.0.0,<6.0.0",
+  "openai>=1.0.0,<2.0.0",
 ]
 
 [tool.poetry]
@@ -78,6 +80,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["hdbscan", "umap", "mlflow", "sklearn", "matplotlib", "matplotlib.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["openai"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -5,10 +5,9 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import time
-import urllib.error
-import urllib.request
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +16,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import psycopg
+from openai import OpenAI
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
@@ -42,6 +42,21 @@ FUNCTIONAL_ROLES = [
 ]
 REVIEW_STATUS_VALUES = {"unreviewed", "accepted", "rejected", "needs_split", "misc"}
 WORD_PATTERN = re.compile(r"[a-zA-Z0-9_]+")
+
+
+def _load_dotenv(dotenv_path: str = ".env") -> None:
+    path = Path(dotenv_path)
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key:
+            os.environ.setdefault(key, value)
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,8 +102,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-semantic-label-confidence", type=float, default=0.05)
     parser.add_argument("--weight-semantic-generic-balance", type=float, default=0.10)
     parser.add_argument("--use-llm-labeling", action="store_true")
-    parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_URL", "http://localhost:11434"))
-    parser.add_argument("--ollama-model", default=os.getenv("OLLAMA_MODEL", "mistral"))
+    parser.add_argument("--llm-max-retries", type=int, default=6)
+    parser.add_argument("--llm-base-backoff-seconds", type=float, default=2.0)
+    parser.add_argument("--llm-min-interval-seconds", type=float, default=1.25)
+    parser.add_argument(
+        "--llm-max-clusters",
+        type=int,
+        default=0,
+        help="Maximum non-noise clusters to label with LLM (0 means no cap).",
+    )
+    parser.add_argument(
+        "--openrouter-url",
+        default=os.getenv("OPENROUTER_URL", "https://openrouter.ai/api/v1"),
+    )
+    parser.add_argument(
+        "--openrouter-model",
+        default=os.getenv("OPENROUTER_MODEL", "qwen/qwen3-next-80b-a3b-instruct:free"),
+    )
+    parser.add_argument("--openrouter-api-key", default=os.getenv("OPENROUTER_API_KEY"))
     parser.add_argument("--mlflow-tracking-uri", default=os.getenv("MLFLOW_TRACKING_URI"))
     parser.add_argument(
         "--mlflow-experiment",
@@ -327,7 +358,16 @@ def _top_terms(texts: list[str], limit: int = 20) -> list[str]:
     return [token for token, _ in counter.most_common(limit)]
 
 
-def _call_ollama_label(summary: dict[str, Any], ollama_url: str, model: str) -> dict[str, Any] | None:
+def _call_openrouter_label(
+    summary: dict[str, Any],
+    openrouter_url: str,
+    model: str,
+    api_key: str | None,
+    max_retries: int,
+    base_backoff_seconds: float,
+) -> tuple[dict[str, Any] | None, str]:
+    if not api_key:
+        return None, "missing_openrouter_api_key"
     prompt = {
         "instruction": (
             "Return JSON with keys functional_role,label_hint,label_confidence,reasoning. "
@@ -335,37 +375,83 @@ def _call_ollama_label(summary: dict[str, Any], ollama_url: str, model: str) -> 
         ),
         "cluster_summary": summary,
     }
-    payload = _safe_json(
-        {"model": model, "prompt": _safe_json(prompt), "stream": False, "format": "json"}
-    ).encode("utf-8")
-    endpoint = f"{ollama_url.rstrip('/')}/api/generate"
-    req = urllib.request.Request(
-        endpoint,
-        data=payload,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-        return None
-    content = body.get("response")
+    client = OpenAI(api_key=api_key, base_url=openrouter_url, max_retries=0, timeout=30.0)
+    response = None
+    attempts = max(1, int(max_retries) + 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You label Yu-Gi-Oh card clusters. Respond with JSON only.",
+                    },
+                    {"role": "user", "content": _safe_json(prompt)},
+                ],
+                temperature=0.2,
+                response_format={"type": "json_object"},
+                extra_headers={
+                    "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", ""),
+                    "X-OpenRouter-Title": os.getenv("OPENROUTER_TITLE", "yugioh-deck-generator"),
+                },
+            )
+            break
+        except Exception as exc:  # noqa: BLE001
+            status_code = getattr(exc, "status_code", None)
+            if status_code == 429 and attempt < attempts:
+                delay = (base_backoff_seconds * (2 ** (attempt - 1))) + random.uniform(0.0, 0.5)
+                logger.warning(
+                    "OpenRouter rate limited (429). retry=%s/%s sleeping=%.2fs",
+                    attempt,
+                    attempts - 1,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            if status_code == 429:
+                return None, "rate_limited_429"
+            return None, f"sdk_error:{type(exc).__name__}"
+    if response is None:
+        return None, "no_response"
+
+    choices = getattr(response, "choices", None)
+    if choices is None or len(choices) == 0:
+        return None, "missing_choices"
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        return None, "missing_message"
+    content = getattr(message, "content", None)
     if not isinstance(content, str):
-        return None
+        return None, "missing_response_text"
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
-        return None
+        return None, "response_text_not_json"
+    if isinstance(parsed, list):
+        if len(parsed) == 0:
+            return None, "response_json_empty_list"
+        first = parsed[0]
+        if not isinstance(first, dict):
+            return None, "response_json_list_non_object"
+        parsed = first
+    elif not isinstance(parsed, dict):
+        return None, "response_json_not_object"
+    if "result" in parsed and isinstance(parsed["result"], dict):
+        parsed = parsed["result"]
     role = str(parsed.get("functional_role", "misc")).strip().lower()
     if role not in FUNCTIONAL_ROLES:
         role = "misc"
-    return {
-        "functional_role": role,
-        "label_hint": str(parsed.get("label_hint", role)).strip()[:120],
-        "label_confidence": float(parsed.get("label_confidence", 0.5)),
-        "reasoning": str(parsed.get("reasoning", "")).strip()[:400],
-    }
+    try:
+        payload = {
+            "functional_role": role,
+            "label_hint": str(parsed.get("label_hint", role)).strip()[:120],
+            "label_confidence": float(parsed.get("label_confidence", 0.5)),
+            "reasoning": str(parsed.get("reasoning", "")).strip()[:400],
+        }
+    except (TypeError, ValueError):
+        return None, "invalid_label_confidence"
+    return payload, "ok"
 
 
 def _compute_cluster_quality_metrics(group: pd.DataFrame) -> dict[str, float]:
@@ -384,8 +470,13 @@ def build_cluster_metadata(
     cluster_version: str,
     generated_at: str,
     use_llm_labeling: bool,
-    ollama_url: str,
-    ollama_model: str,
+    openrouter_url: str,
+    openrouter_model: str,
+    openrouter_api_key: str | None,
+    llm_max_retries: int,
+    llm_base_backoff_seconds: float,
+    llm_min_interval_seconds: float,
+    llm_max_clusters: int,
     noise_summary: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     merged = cluster_df.merge(
@@ -399,6 +490,10 @@ def build_cluster_metadata(
     llm_succeeded = 0
     llm_failed = 0
     heuristic_fallback = 0
+    llm_failure_reasons: Counter[str] = Counter()
+    llm_failure_samples: list[str] = []
+    llm_labeled_clusters = 0
+    last_llm_call_ts = 0.0
     for cluster_id, group in merged.groupby("cluster_id", sort=True):
         cluster_id_int = int(cluster_id)
         if len(group) == 0:
@@ -422,38 +517,6 @@ def build_cluster_metadata(
         top_terms = _top_terms(texts, limit=20)
         avg_similarity = float(np.mean(np.clip(1.0 - dists, -1.0, 1.0)))
         heuristic_role, heuristic_source = _heuristic_role_from_text(" ".join(texts))
-        label_payload = None
-        if use_llm_labeling and cluster_id_int != -1:
-            llm_attempted += 1
-            label_payload = _call_ollama_label(
-                {
-                    "cluster_id": cluster_id_int,
-                    "cluster_size": int(len(group)),
-                    "top_terms": top_terms,
-                    "archetype_distribution": archetype_dist,
-                    "type_distribution": type_dist,
-                    "avg_similarity": avg_similarity,
-                    "representative_cards": [x["card_name"] for x in representative_cards[:5]],
-                },
-                ollama_url=ollama_url,
-                model=ollama_model,
-            )
-            if label_payload is not None:
-                llm_succeeded += 1
-            else:
-                llm_failed += 1
-        if label_payload is None:
-            heuristic_fallback += 1
-            label_payload = {
-                "functional_role": heuristic_role,
-                "label_hint": heuristic_role.replace("_", " "),
-                "label_confidence": 0.55,
-                "reasoning": heuristic_source,
-            }
-            label_source = heuristic_source
-        else:
-            label_source = "llm"
-
         metadata_json = {
             "representative_cards": representative_cards,
             "top_terms": top_terms,
@@ -463,13 +526,63 @@ def build_cluster_metadata(
                 **_compute_cluster_quality_metrics(group),
                 "avg_similarity": avg_similarity,
             },
-            "llm_reasoning": label_payload.get("reasoning", ""),
+            "llm_reasoning": "",
         }
         if cluster_id_int == -1:
             metadata_json["noise_summary"] = {
                 "noise_cluster": True,
                 **(noise_summary or {}),
             }
+        label_payload = None
+        can_call_llm = (
+            use_llm_labeling
+            and cluster_id_int != -1
+            and (llm_max_clusters <= 0 or llm_labeled_clusters < llm_max_clusters)
+        )
+        llm_status = "not_attempted"
+        if can_call_llm:
+            llm_attempted += 1
+            elapsed = time.perf_counter() - last_llm_call_ts
+            sleep_for = max(0.0, llm_min_interval_seconds - elapsed)
+            if sleep_for > 0.0:
+                time.sleep(sleep_for)
+            label_payload, llm_status = _call_openrouter_label(
+                {
+                    "cluster_id": cluster_id_int,
+                    "cluster_size": int(len(group)),
+                    "top_terms": top_terms,
+                    "archetype_distribution": archetype_dist,
+                    "type_distribution": type_dist,
+                    "avg_similarity": avg_similarity,
+                    "representative_cards": [x["card_name"] for x in representative_cards[:5]],
+                },
+                openrouter_url=openrouter_url,
+                model=openrouter_model,
+                api_key=openrouter_api_key,
+                max_retries=llm_max_retries,
+                base_backoff_seconds=llm_base_backoff_seconds,
+            )
+            last_llm_call_ts = time.perf_counter()
+        if label_payload is not None and llm_status == "ok":
+            llm_succeeded += 1
+            llm_labeled_clusters += 1
+            label_source = "llm"
+        else:
+            if llm_status != "not_attempted":
+                llm_failed += 1
+                llm_failure_reasons[llm_status] += 1
+                if len(llm_failure_samples) < 5:
+                    llm_failure_samples.append(
+                        f"cluster_id={cluster_id_int} status={llm_status} model={openrouter_model} url={openrouter_url}"
+                    )
+            heuristic_fallback += 1
+            label_payload = {
+                "functional_role": heuristic_role,
+                "label_hint": heuristic_role.replace("_", " "),
+                "label_confidence": 0.55,
+                "reasoning": heuristic_source,
+            }
+            label_source = heuristic_source
 
         metadata_rows.append(
             {
@@ -482,7 +595,10 @@ def build_cluster_metadata(
                 "label_source": str(label_source),
                 "review_status": "unreviewed",
                 "medoid_card_id": medoid_card_id,
-                "metadata": metadata_json,
+                "metadata": {
+                    **metadata_json,
+                    "llm_reasoning": str(label_payload.get("reasoning", "")),
+                },
                 "generated_at": generated_at,
             }
         )
@@ -497,6 +613,9 @@ def build_cluster_metadata(
         llm_failed,
         heuristic_fallback,
     )
+    if llm_failed > 0:
+        logger.warning("LLM labeling failure breakdown: %s", dict(llm_failure_reasons))
+        logger.warning("LLM labeling failure samples: %s", llm_failure_samples)
     return pd.DataFrame(metadata_rows)
 
 
@@ -1223,6 +1342,7 @@ def log_final_cluster_artifacts_to_mlflow(
 
 def main() -> None:
     start_time = time.perf_counter()
+    _load_dotenv()
     args = parse_args()
     embeddings_df = pd.read_parquet(args.embeddings_file)
     cards_df = pd.read_parquet(args.cards_file)
@@ -1273,8 +1393,13 @@ def main() -> None:
         cluster_version=args.cluster_version,
         generated_at=generated_at,
         use_llm_labeling=args.use_llm_labeling,
-        ollama_url=args.ollama_url,
-        ollama_model=args.ollama_model,
+        openrouter_url=args.openrouter_url,
+        openrouter_model=args.openrouter_model,
+        openrouter_api_key=args.openrouter_api_key,
+        llm_max_retries=args.llm_max_retries,
+        llm_base_backoff_seconds=args.llm_base_backoff_seconds,
+        llm_min_interval_seconds=args.llm_min_interval_seconds,
+        llm_max_clusters=args.llm_max_clusters,
         noise_summary=noise_summary,
     )
     cluster_df = attach_nearest_cluster_labels(cluster_df, metadata_df)

@@ -50,12 +50,12 @@ build-features:
 feature-pipeline: build-features
 
 cluster-embeddings:
-	$(ZENML_ENV) poetry run python -m yugioh_deck_generator.clustering.cluster_embeddings --publish-postgres --mlflow-tracking-uri http://localhost:5000 --distance-metric euclidean --use-umap --umap-n-components 10 --umap-n-neighbors 10 --umap-min-dist 0.01 --umap-metric euclidean --min-cluster-size 3 --min-samples 1 --cluster-selection-method eom --cluster-selection-epsilon 0.1 --use-llm-labeling
+	$(ZENML_ENV) poetry run python -m yugioh_deck_generator.clustering.cluster_embeddings --publish-postgres --mlflow-tracking-uri http://localhost:5100 --distance-metric euclidean --use-umap --umap-n-components 10 --umap-n-neighbors 10 --umap-min-dist 0.01 --umap-metric euclidean --min-cluster-size 3 --min-samples 1 --cluster-selection-method eom --cluster-selection-epsilon 0.1 --use-llm-labeling --llm-min-interval-seconds 1.5 --llm-max-retries 6 --llm-base-backoff-seconds 2.0 --llm-max-clusters 0
 
 cluster-embeddings-sweep:
-	$(ZENML_ENV) poetry run python -m yugioh_deck_generator.clustering.sweep_hdbscan --mlflow-tracking-uri http://localhost:5000 --use-umap --n-trials 300 --top-n 10
+	$(ZENML_ENV) poetry run python -m yugioh_deck_generator.clustering.sweep_hdbscan --mlflow-tracking-uri http://localhost:5100 --use-umap --n-trials 300 --top-n 10
 
 mlflow-init-experiments:
-	$(ZENML_ENV) poetry run python -m yugioh_deck_generator.training.setup_mlflow_experiments --tracking-uri http://localhost:5000
+	$(ZENML_ENV) poetry run python -m yugioh_deck_generator.training.setup_mlflow_experiments --tracking-uri http://localhost:5100
 
 check: lint typecheck test
