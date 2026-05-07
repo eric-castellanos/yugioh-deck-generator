@@ -650,7 +650,7 @@ def build_projection_df(
             points = projector.fit_transform(vectors)
         except Exception:
             manifold = importlib.import_module("sklearn.manifold")
-            TSNE = getattr(manifold, "TSNE")
+            TSNE = manifold.TSNE
 
             method = "tsne"
             points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(
@@ -658,7 +658,7 @@ def build_projection_df(
             )
     else:
         manifold = importlib.import_module("sklearn.manifold")
-        TSNE = getattr(manifold, "TSNE")
+        TSNE = manifold.TSNE
 
         points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(
             vectors
