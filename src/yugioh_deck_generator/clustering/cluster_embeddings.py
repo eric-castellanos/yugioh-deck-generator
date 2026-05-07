@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -648,14 +649,16 @@ def build_projection_df(
             projector = umap.UMAP(n_components=2, random_state=random_state)
             points = projector.fit_transform(vectors)
         except Exception:
-            from sklearn.manifold import TSNE  # type: ignore[import-untyped]
+            manifold = importlib.import_module("sklearn.manifold")
+            TSNE = getattr(manifold, "TSNE")
 
             method = "tsne"
             points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(
                 vectors
             )
     else:
-        from sklearn.manifold import TSNE
+        manifold = importlib.import_module("sklearn.manifold")
+        TSNE = getattr(manifold, "TSNE")
 
         points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(
             vectors

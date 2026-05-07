@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
 from datetime import UTC, datetime
@@ -483,7 +484,7 @@ def main() -> None:
     study_name = f"hdbscan_optuna_{timestamp}"
 
     try:
-        import optuna
+        optuna = importlib.import_module("optuna")
     except ImportError as exc:
         raise ImportError("optuna is required for sweep_hdbscan optimization.") from exc
 
