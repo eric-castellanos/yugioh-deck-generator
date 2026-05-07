@@ -648,7 +648,7 @@ def build_projection_df(
             projector = umap.UMAP(n_components=2, random_state=random_state)
             points = projector.fit_transform(vectors)
         except Exception:
-            from sklearn.manifold import TSNE
+            from sklearn.manifold import TSNE  # type: ignore[import-untyped]
 
             method = "tsne"
             points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(
@@ -709,7 +709,7 @@ def compute_final_metrics_and_scores(
     labels: np.ndarray,
     probabilities: np.ndarray,
     tiny_cluster_max_size: int = 3,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str]:
     total = len(labels)
     if total == 0:
         raise ValueError("labels must not be empty")
@@ -760,7 +760,7 @@ def compute_final_metrics_and_scores(
 
 
 def compute_structural_score(
-    metrics: dict[str, float | int], args: argparse.Namespace
+    metrics: dict[str, float | int | str], args: argparse.Namespace
 ) -> dict[str, float]:
     num_clusters = int(metrics["num_clusters"])
     noise_ratio = float(metrics["noise_ratio"])

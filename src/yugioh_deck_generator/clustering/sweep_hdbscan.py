@@ -169,7 +169,7 @@ def compute_cluster_metrics(
     probabilities: np.ndarray | None = None,
     *,
     tiny_cluster_max_size: int = 3,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str]:
     total = len(labels)
     if total == 0:
         raise ValueError("labels must not be empty")
@@ -225,7 +225,7 @@ def compute_cluster_metrics(
 
 
 def compute_structural_score(
-    metrics: dict[str, float | int], args: argparse.Namespace
+    metrics: dict[str, float | int | str], args: argparse.Namespace
 ) -> dict[str, float]:
     num_clusters = int(metrics["num_clusters"])
     noise_ratio = float(metrics["noise_ratio"])
@@ -378,7 +378,7 @@ def compute_final_score(
 
 
 def is_good_run(
-    metrics: dict[str, float | int],
+    metrics: dict[str, float | int | str],
     noise_ratio_threshold: float,
     min_clusters_threshold: int,
     largest_cluster_ratio_threshold: float,
@@ -391,7 +391,7 @@ def is_good_run(
 
 
 def compute_guardrail_flags(
-    metrics: dict[str, float | int],
+    metrics: dict[str, float | int | str],
     *,
     noise_ratio_threshold: float,
     min_clusters_threshold: int,
