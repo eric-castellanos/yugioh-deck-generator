@@ -69,8 +69,13 @@ def test_build_cluster_metadata_includes_required_fields() -> None:
         cluster_version="c1",
         generated_at="2026-01-01T00:00:00Z",
         use_llm_labeling=False,
-        ollama_url="http://localhost:11434",
-        ollama_model="mistral",
+        openrouter_url="https://openrouter.ai/api/v1",
+        openrouter_model="openai/gpt-4o-mini",
+        openrouter_api_key=None,
+        llm_max_retries=0,
+        llm_base_backoff_seconds=0.0,
+        llm_min_interval_seconds=0.0,
+        llm_max_clusters=0,
     )
 
     assert not metadata.empty
