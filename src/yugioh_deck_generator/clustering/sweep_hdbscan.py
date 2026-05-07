@@ -224,7 +224,9 @@ def compute_cluster_metrics(
     }
 
 
-def compute_structural_score(metrics: dict[str, float | int], args: argparse.Namespace) -> dict[str, float]:
+def compute_structural_score(
+    metrics: dict[str, float | int], args: argparse.Namespace
+) -> dict[str, float]:
     num_clusters = int(metrics["num_clusters"])
     noise_ratio = float(metrics["noise_ratio"])
     largest_cluster_ratio = float(metrics["largest_cluster_ratio"])
@@ -239,8 +241,12 @@ def compute_structural_score(metrics: dict[str, float | int], args: argparse.Nam
         - args.weight_tiny_cluster_ratio * tiny_cluster_ratio
         + args.weight_membership_probability * membership_probability_mean
     )
-    low_clusters_penalty = args.penalty_low_clusters if num_clusters < args.min_clusters_threshold else 0.0
-    high_noise_penalty = args.penalty_high_noise if noise_ratio > args.noise_ratio_threshold else 0.0
+    low_clusters_penalty = (
+        args.penalty_low_clusters if num_clusters < args.min_clusters_threshold else 0.0
+    )
+    high_noise_penalty = (
+        args.penalty_high_noise if noise_ratio > args.noise_ratio_threshold else 0.0
+    )
     structural_score = float(raw_score - low_clusters_penalty - high_noise_penalty)
     return {
         "normalized_num_clusters": float(normalized_num_clusters),
@@ -285,7 +291,6 @@ def compute_semantic_metrics(
     archetype_heavy_count = 0
     coherence_values: list[float] = []
     labels_arr = np.asarray(labels)
-    archetypes = non_noise_df["archetype"].astype("string")
     conf = pd.to_numeric(non_noise_df["label_confidence"], errors="coerce").fillna(0.0)
 
     for cluster_id in unique_clusters:
@@ -323,7 +328,9 @@ def compute_semantic_metrics(
     cluster_count = max(1, len(unique_clusters))
     generic_fraction = float(generic_heavy_count / cluster_count)
     archetype_fraction = float(archetype_heavy_count / cluster_count)
-    generic_archetype_balance_score = float(max(0.0, 1.0 - abs(generic_fraction - archetype_fraction)))
+    generic_archetype_balance_score = float(
+        max(0.0, 1.0 - abs(generic_fraction - archetype_fraction))
+    )
 
     return {
         "archetype_purity_mean": archetype_purity_mean,
@@ -393,7 +400,9 @@ def compute_guardrail_flags(
 ) -> dict[str, int]:
     noise_flag = int(float(metrics["noise_ratio"]) > noise_ratio_threshold)
     cluster_flag = int(int(metrics["num_clusters"]) < min_clusters_threshold)
-    largest_cluster_flag = int(float(metrics["largest_cluster_ratio"]) > largest_cluster_ratio_threshold)
+    largest_cluster_flag = int(
+        float(metrics["largest_cluster_ratio"]) > largest_cluster_ratio_threshold
+    )
     tiny_cluster_flag = int(float(metrics["tiny_cluster_ratio"]) > tiny_cluster_ratio_threshold)
     any_flag = int(noise_flag or cluster_flag or largest_cluster_flag or tiny_cluster_flag)
     return {
@@ -454,9 +463,9 @@ def _suggest_params(trial: Any, *, use_umap: bool) -> dict[str, Any]:
         params["umap_min_dist"] = trial.suggest_categorical("umap_min_dist", UMAP_MIN_DIST_GRID)
         params["umap_metric"] = trial.suggest_categorical("umap_metric", UMAP_METRIC_GRID)
     else:
-        params["umap_n_components"] = int(0)
-        params["umap_n_neighbors"] = int(0)
-        params["umap_min_dist"] = float(0.0)
+        params["umap_n_components"] = 0
+        params["umap_n_neighbors"] = 0
+        params["umap_min_dist"] = 0.0
         params["umap_metric"] = "none"
     return params
 
@@ -582,7 +591,9 @@ def main() -> None:
     summary_rows = [dict(trial.user_attrs["metrics_payload"]) for trial in completed_trials]
     summary_df = pd.DataFrame(summary_rows)
     final_ranked_df = summary_df.sort_values("final_score", ascending=False).reset_index(drop=True)
-    structural_ranked_df = summary_df.sort_values("structural_score", ascending=False).reset_index(drop=True)
+    structural_ranked_df = summary_df.sort_values("structural_score", ascending=False).reset_index(
+        drop=True
+    )
     top_final_df = final_ranked_df.head(args.top_n).copy()
     top_structural_df = structural_ranked_df.head(args.top_n).copy()
 
@@ -599,7 +610,11 @@ def main() -> None:
     best_payload = dict(study.best_trial.user_attrs["metrics_payload"])
     best_path.write_text(json.dumps(best_payload, indent=2), encoding="utf-8")
 
-    logger.info("Best trial by final_score: trial=%s score=%.4f", study.best_trial.number, study.best_value)
+    logger.info(
+        "Best trial by final_score: trial=%s score=%.4f",
+        study.best_trial.number,
+        study.best_value,
+    )
     logger.info(
         "Top final_score runs:\n%s",
         top_final_df[

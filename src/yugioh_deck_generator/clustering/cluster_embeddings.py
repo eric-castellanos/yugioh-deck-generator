@@ -298,7 +298,9 @@ def enrich_noise_with_nearest_cluster(
     # Inverse-distance confidence, normalized to [0,1] with 0 distance -> 1.0
     confidences = 1.0 / (1.0 + best_dists)
 
-    enriched.loc[noise_idx, "nearest_cluster_id"] = pd.Series(best_ids, index=noise_idx, dtype="Int64")
+    enriched.loc[noise_idx, "nearest_cluster_id"] = pd.Series(
+        best_ids, index=noise_idx, dtype="Int64"
+    )
     enriched.loc[noise_idx, "nearest_cluster_distance"] = best_dists.astype(float)
     enriched.loc[noise_idx, "nearest_cluster_confidence"] = confidences.astype(float)
     return enriched
@@ -317,12 +319,20 @@ def _compute_noise_summary(
     total = max(1, len(merged))
     noise = merged[merged["cluster_id"] == -1]
     nearest_dist = (
-        noise["nearest_cluster_id"].dropna().astype("Int64").astype(str).value_counts().head(15).to_dict()
+        noise["nearest_cluster_id"]
+        .dropna()
+        .astype("Int64")
+        .astype(str)
+        .value_counts()
+        .head(15)
+        .to_dict()
     )
     return {
         "num_noise_cards": int(len(noise)),
         "noise_ratio": float(len(noise) / total),
-        "common_noise_card_types": noise["type"].fillna("unknown").astype(str).value_counts().head(10).to_dict(),
+        "common_noise_card_types": (
+            noise["type"].fillna("unknown").astype(str).value_counts().head(10).to_dict()
+        ),
         "common_noise_archetypes": noise["archetype"]
         .fillna("unknown")
         .astype(str)
@@ -505,7 +515,9 @@ def build_cluster_metadata(
         medoid_idx = int(np.argmin(dists))
         medoid_card_id = int(group.iloc[medoid_idx]["card_id"])
 
-        archetype_dist = group["archetype"].fillna("unknown").astype(str).value_counts().head(15).to_dict()
+        archetype_dist = (
+            group["archetype"].fillna("unknown").astype(str).value_counts().head(15).to_dict()
+        )
         type_dist = group["type"].fillna("unknown").astype(str).value_counts().head(15).to_dict()
         texts = group["desc"].fillna("").astype(str).tolist()
         representative_cards = (
@@ -573,7 +585,8 @@ def build_cluster_metadata(
                 llm_failure_reasons[llm_status] += 1
                 if len(llm_failure_samples) < 5:
                     llm_failure_samples.append(
-                        f"cluster_id={cluster_id_int} status={llm_status} model={openrouter_model} url={openrouter_url}"
+                        f"cluster_id={cluster_id_int} status={llm_status} "
+                        f"model={openrouter_model} url={openrouter_url}"
                     )
             heuristic_fallback += 1
             label_payload = {
@@ -638,11 +651,15 @@ def build_projection_df(
             from sklearn.manifold import TSNE
 
             method = "tsne"
-            points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(vectors)
+            points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(
+                vectors
+            )
     else:
         from sklearn.manifold import TSNE
 
-        points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(vectors)
+        points = TSNE(n_components=2, random_state=random_state, init="random").fit_transform(
+            vectors
+        )
     return pd.DataFrame(
         {
             "card_id": card_ids.astype("int64"),
@@ -742,7 +759,9 @@ def compute_final_metrics_and_scores(
     }
 
 
-def compute_structural_score(metrics: dict[str, float | int], args: argparse.Namespace) -> dict[str, float]:
+def compute_structural_score(
+    metrics: dict[str, float | int], args: argparse.Namespace
+) -> dict[str, float]:
     num_clusters = int(metrics["num_clusters"])
     noise_ratio = float(metrics["noise_ratio"])
     largest_cluster_ratio = float(metrics["largest_cluster_ratio"])
@@ -756,8 +775,12 @@ def compute_structural_score(metrics: dict[str, float | int], args: argparse.Nam
         - args.weight_tiny_cluster_ratio * tiny_cluster_ratio
         + args.weight_membership_probability * membership_probability_mean
     )
-    low_clusters_penalty = args.penalty_low_clusters if num_clusters < args.min_clusters_threshold else 0.0
-    high_noise_penalty = args.penalty_high_noise if noise_ratio > args.noise_ratio_threshold else 0.0
+    low_clusters_penalty = (
+        args.penalty_low_clusters if num_clusters < args.min_clusters_threshold else 0.0
+    )
+    high_noise_penalty = (
+        args.penalty_high_noise if noise_ratio > args.noise_ratio_threshold else 0.0
+    )
     structural_score = float(raw_score - low_clusters_penalty - high_noise_penalty)
     return {
         "normalized_num_clusters": float(normalized_num_clusters),
@@ -780,7 +803,9 @@ def _safe_mean_similarity_to_centroid(vectors: np.ndarray) -> float:
     return float(np.mean(sims))
 
 
-def _compute_semantic_quality_metrics(labels: np.ndarray, vectors: np.ndarray, semantic_df: pd.DataFrame) -> dict[str, float]:
+def _compute_semantic_quality_metrics(
+    labels: np.ndarray, vectors: np.ndarray, semantic_df: pd.DataFrame
+) -> dict[str, float]:
     df = semantic_df.copy()
     df["cluster_id"] = labels
     non_noise_df = df[df["cluster_id"] != -1].copy()
@@ -830,7 +855,9 @@ def _compute_semantic_quality_metrics(labels: np.ndarray, vectors: np.ndarray, s
     cluster_count = max(1, len(unique_clusters))
     generic_fraction = float(generic_heavy_count / cluster_count)
     archetype_fraction = float(archetype_heavy_count / cluster_count)
-    generic_archetype_balance_score = float(max(0.0, 1.0 - abs(generic_fraction - archetype_fraction)))
+    generic_archetype_balance_score = float(
+        max(0.0, 1.0 - abs(generic_fraction - archetype_fraction))
+    )
     return {
         "archetype_purity_mean": archetype_purity_mean,
         "functional_coherence_score": functional_coherence_score,
@@ -866,7 +893,9 @@ def compute_semantic_score(
     }
 
 
-def compute_final_score(structural_score: dict[str, float], semantic_score: dict[str, float]) -> dict[str, float]:
+def compute_final_score(
+    structural_score: dict[str, float], semantic_score: dict[str, float]
+) -> dict[str, float]:
     final_score = float(structural_score["structural_score"] + semantic_score["semantic_score"])
     return {"final_score": final_score}
 
@@ -946,7 +975,12 @@ def export_final_clusters_json(
         "functional_role",
         "label_hint",
     ]
-    float_cols = ["cluster_probability", "outlier_score", "nearest_cluster_distance", "nearest_cluster_confidence"]
+    float_cols = [
+        "cluster_probability",
+        "outlier_score",
+        "nearest_cluster_distance",
+        "nearest_cluster_confidence",
+    ]
     int_cols = ["nearest_cluster_id"]
     final_records[text_cols] = final_records[text_cols].fillna("")
     final_records[float_cols] = final_records[float_cols].fillna(0.0)
@@ -1050,9 +1084,7 @@ def export_cluster_examples(
     normalized_vectors = _normalize_l2(vectors)
 
     examples: list[dict[str, Any]] = []
-    for cid, group in merged[merged["cluster_id"] != -1].groupby(
-        "cluster_id", sort=True
-    ):
+    for cid, group in merged[merged["cluster_id"] != -1].groupby("cluster_id", sort=True):
         cid_int = int(cid)
         meta = meta_map.get(cid_int, {})
         idx = np.where(labels == cid_int)[0]
@@ -1135,7 +1167,9 @@ def export_cluster_quality_summary(
         "tiny_cluster_ratio": float(final_metrics.get("tiny_cluster_ratio", 0.0)),
         "membership_probability_mean": float(final_metrics.get("membership_probability_mean", 0.0)),
         "archetype_purity_mean": float(semantic_metrics.get("archetype_purity_mean", 0.0)),
-        "functional_coherence_score": float(semantic_metrics.get("functional_coherence_score", 0.0)),
+        "functional_coherence_score": float(
+            semantic_metrics.get("functional_coherence_score", 0.0)
+        ),
         "generic_archetype_balance_score": float(
             semantic_metrics.get("generic_archetype_balance_score", 0.0)
         ),
@@ -1213,7 +1247,10 @@ def persist_cluster_assignments(
     conn: psycopg.Connection[Any], schema: str, cluster_version: str, cluster_df: pd.DataFrame
 ) -> None:
     with conn.cursor() as cur:
-        cur.execute(f"DELETE FROM {schema}.card_cluster_assignments WHERE cluster_version = %s", (cluster_version,))
+        cur.execute(
+            f"DELETE FROM {schema}.card_cluster_assignments WHERE cluster_version = %s",
+            (cluster_version,),
+        )
         ordered = cluster_df[
             [
                 "card_id",
@@ -1231,7 +1268,10 @@ def persist_cluster_assignments(
                 "generated_at",
             ]
         ].copy()
-        rows = [tuple(None if pd.isna(v) else v for v in r) for r in ordered.itertuples(index=False, name=None)]
+        rows = [
+            tuple(None if pd.isna(v) else v for v in r)
+            for r in ordered.itertuples(index=False, name=None)
+        ]
         cur.executemany(
             f"""
             INSERT INTO {schema}.card_cluster_assignments (
@@ -1277,14 +1317,17 @@ def persist_cluster_metadata(
             f"""
             INSERT INTO {schema}.embedding_cluster_metadata (
                 cluster_version, cluster_id, cluster_size, functional_role, label_hint,
-                label_confidence, label_source, review_status, medoid_card_id, metadata, generated_at
+                label_confidence, label_source, review_status, medoid_card_id,
+                metadata, generated_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
             """,
             rows,
         )
 
 
-def _publish_postgres(args: argparse.Namespace, cluster_df: pd.DataFrame, metadata_df: pd.DataFrame) -> None:
+def _publish_postgres(
+    args: argparse.Namespace, cluster_df: pd.DataFrame, metadata_df: pd.DataFrame
+) -> None:
     conn = psycopg.connect(
         host=args.pg_host,
         port=args.pg_port,
@@ -1350,19 +1393,21 @@ def main() -> None:
     args.cluster_version = _build_cluster_version(args, embedding_records)
     generated_at = datetime.now(UTC).isoformat()
 
-    labels, probabilities, outlier_scores, n_umap_components, clustering_space_vectors = cluster_embeddings(
-        vectors=vectors,
-        min_cluster_size=args.min_cluster_size,
-        min_samples=args.min_samples,
-        metric=args.distance_metric,
-        cluster_selection_method=args.cluster_selection_method,
-        cluster_selection_epsilon=args.cluster_selection_epsilon,
-        use_umap=args.use_umap,
-        umap_n_components=args.umap_n_components,
-        umap_n_neighbors=args.umap_n_neighbors,
-        umap_min_dist=args.umap_min_dist,
-        umap_metric=args.umap_metric,
-        random_state=args.random_state,
+    labels, probabilities, outlier_scores, n_umap_components, clustering_space_vectors = (
+        cluster_embeddings(
+            vectors=vectors,
+            min_cluster_size=args.min_cluster_size,
+            min_samples=args.min_samples,
+            metric=args.distance_metric,
+            cluster_selection_method=args.cluster_selection_method,
+            cluster_selection_epsilon=args.cluster_selection_epsilon,
+            use_umap=args.use_umap,
+            umap_n_components=args.umap_n_components,
+            umap_n_neighbors=args.umap_n_neighbors,
+            umap_min_dist=args.umap_min_dist,
+            umap_metric=args.umap_metric,
+            random_state=args.random_state,
+        )
     )
 
     cluster_df = pd.DataFrame(
@@ -1457,7 +1502,9 @@ def main() -> None:
     )
     semantic_df["archetype"] = semantic_df["archetype"].fillna("unknown").astype("string")
     semantic_df["label_confidence"] = (
-        pd.to_numeric(semantic_df["label_confidence"], errors="coerce").fillna(0.0).clip(lower=0.0, upper=1.0)
+        pd.to_numeric(semantic_df["label_confidence"], errors="coerce")
+        .fillna(0.0)
+        .clip(lower=0.0, upper=1.0)
     )
     semantic_metrics = _compute_semantic_quality_metrics(labels, vectors, semantic_df)
     semantic_score = compute_semantic_score(semantic_metrics, args)
