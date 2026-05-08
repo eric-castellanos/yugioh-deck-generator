@@ -80,7 +80,7 @@ module = ["zenml"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["hdbscan", "umap", "mlflow", "sklearn", "matplotlib", "matplotlib.*"]
+module = ["hdbscan", "umap", "mlflow", "mlflow.*", "sklearn.*", "matplotlib", "matplotlib.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
