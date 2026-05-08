@@ -18,7 +18,7 @@ MAX_DEFAULT_COPIES = 3
 PREFERRED_MIN_COPIES = 2
 PREFERRED_MAX_COPIES = 3
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
-logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 FUSION_ENABLER_NAMES = {
     "polymerization",

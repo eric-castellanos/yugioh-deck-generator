@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sqlite3
+from pathlib import Path
 
 from yugioh_deck_generator.generation.config_loader import (
     load_formats,
@@ -37,6 +39,14 @@ def parse_args() -> argparse.Namespace:
     gen.add_argument("--parallel-formats", type=int, default=None)
     gen.add_argument("--p-staple", type=float, default=None)
     gen.add_argument("--novelty-ratio", type=float, default=None)
+    gen.add_argument(
+        "--cards-cdb-path",
+        default=None,
+        help=(
+            "Optional path to cards.cdb; when provided, generation is restricted "
+            "to IDs present in datas.id."
+        ),
+    )
 
     val = sub.add_parser("validate")
     val.add_argument("--decks-file", required=True)
@@ -59,6 +69,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _load_allowed_ids_from_cdb(path: str | Path) -> set[int]:
+    db_path = Path(path)
+    if not db_path.exists():
+        raise FileNotFoundError(f"cards.cdb not found: {db_path}")
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute("SELECT id FROM datas WHERE id > 0").fetchall()
+    finally:
+        conn.close()
+    return {int(r[0]) for r in rows if r and int(r[0]) > 0}
+
+
 def _cmd_generate(args: argparse.Namespace) -> int:
     cards_df = read_table(args.cards_file)
     clusters_df = read_table(args.cluster_assignments)
@@ -73,6 +95,9 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if args.novelty_ratio is not None
         else float(profile.get("novelty_ratio", 0.1))
     )
+    allow_card_ids = None
+    if args.cards_cdb_path:
+        allow_card_ids = _load_allowed_ids_from_cdb(args.cards_cdb_path)
 
     run_generation(
         cards_df=cards_df,
@@ -88,6 +113,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         resume_run_id=args.resume_run_id,
         seed=args.seed,
         parallel_formats=args.parallel_formats,
+        allow_card_ids=allow_card_ids,
     )
     return 0
 
@@ -127,7 +153,7 @@ def _cmd_score(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT, force=True)
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, force=True)
     args = parse_args()
     if args.command == "generate":
         return _cmd_generate(args)

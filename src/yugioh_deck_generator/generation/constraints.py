@@ -14,7 +14,7 @@ from yugioh_deck_generator.generation.material_requirements import (
 )
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
-logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 EXTRA_ALLOWED_TYPES = ("fusion", "synchro", "xyz", "link", "pendulum")

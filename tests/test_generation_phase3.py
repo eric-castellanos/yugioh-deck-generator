@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+from yugioh_deck_generator.generation.cli import _load_allowed_ids_from_cdb
 from yugioh_deck_generator.generation.constraints import validate_deck
 from yugioh_deck_generator.generation.generator import run_generation
 from yugioh_deck_generator.generation.io import write_ydk
@@ -472,3 +475,124 @@ def test_run_generation_outputs_files(tmp_path: Path) -> None:
     assert (run_dir / "generated_decks.jsonl").exists()
     ydk_files = list(run_dir.glob("*.ydk"))
     assert len(ydk_files) >= 1
+
+
+def test_load_allowed_ids_from_cdb_reads_datas_ids(tmp_path: Path) -> None:
+    cdb_path = tmp_path / "cards.cdb"
+    conn = sqlite3.connect(str(cdb_path))
+    try:
+        conn.execute("CREATE TABLE datas (id INTEGER)")
+        conn.executemany("INSERT INTO datas (id) VALUES (?)", [(1001,), (1002,), (0,), (-1,)])
+        conn.commit()
+    finally:
+        conn.close()
+
+    allowed = _load_allowed_ids_from_cdb(cdb_path)
+    assert allowed == {1001, 1002}
+
+
+def test_run_generation_with_allowlist_filters_output_ids(tmp_path: Path) -> None:
+    cards = _cards_fixture()
+    clusters = _cluster_fixture(cards)
+
+    allowed_main = (
+        cards[~cards["type"].str.contains("Fusion|Synchro", case=False, regex=True)]["id"]
+        .astype(int)
+        .tolist()
+    )
+    allowed_extra = (
+        cards[cards["type"].str.contains("Fusion|Synchro", case=False, regex=True)]["id"]
+        .astype(int)
+        .head(15)
+        .tolist()
+    )
+    allow_card_ids = set(allowed_main + allowed_extra)
+
+    summary = run_generation(
+        cards_df=cards,
+        clusters_df=clusters,
+        formats={
+            "Edison": type(
+                "F",
+                (),
+                {
+                    "name": "Edison",
+                    "main_deck_size": 40,
+                    "extra_deck_size": 15,
+                    "min_extra": 15,
+                    "max_extra": 15,
+                    "legality_source": None,
+                    "card_type_ratios": type(
+                        "R", (), {"monster": 0.5, "spell": 0.25, "trap": 0.25, "tolerance_count": 4}
+                    )(),
+                },
+            )()
+        },
+        selected_formats=["Edison"],
+        decks_per_format=1,
+        mode="archetype_reconstruction",
+        staple_pools={"Edison": []},
+        p_staple=0.0,
+        novelty_ratio=0.0,
+        output_dir=str(tmp_path / "generated_allowlist"),
+        seed=42,
+        allow_card_ids=allow_card_ids,
+    )
+
+    assert summary["accepted_count"] == 1
+    decks_path = Path(
+        tmp_path / "generated_allowlist" / summary["run_id"] / "generated_decks.jsonl"
+    )
+    rows = [
+        json.loads(line)
+        for line in decks_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1
+    generated_ids = set(rows[0]["main"] + rows[0]["extra"])
+    assert generated_ids.issubset(allow_card_ids)
+
+
+def test_run_generation_allowlist_without_main_candidates_raises(tmp_path: Path) -> None:
+    cards = _cards_fixture()
+    clusters = _cluster_fixture(cards)
+    # Keep only extra-deck card IDs so main candidate pool becomes empty.
+    allow_card_ids = set(
+        cards[cards["type"].str.contains("Fusion|Synchro", case=False, regex=True)]["id"]
+        .astype(int)
+        .tolist()
+    )
+
+    with pytest.raises(RuntimeError, match="No main-deck candidates remain"):
+        run_generation(
+            cards_df=cards,
+            clusters_df=clusters,
+            formats={
+                "Edison": type(
+                    "F",
+                    (),
+                    {
+                        "name": "Edison",
+                        "main_deck_size": 40,
+                        "extra_deck_size": 15,
+                        "min_extra": 15,
+                        "max_extra": 15,
+                        "legality_source": None,
+                        "card_type_ratios": type(
+                            "R",
+                            (),
+                            {"monster": 0.5, "spell": 0.25, "trap": 0.25, "tolerance_count": 4},
+                        )(),
+                    },
+                )()
+            },
+            selected_formats=["Edison"],
+            decks_per_format=1,
+            mode="archetype_reconstruction",
+            staple_pools={"Edison": []},
+            p_staple=0.0,
+            novelty_ratio=0.0,
+            output_dir=str(tmp_path / "generated_allowlist_fail"),
+            seed=42,
+            allow_card_ids=allow_card_ids,
+        )
