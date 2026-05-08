@@ -78,10 +78,16 @@ def load_formats(path: str | Path) -> dict[str, FormatConfig]:
             name=name,
             main_deck_size=main_deck_size,
             extra_deck_size=extra_deck_size,
-            min_main=_to_int(raw.get("min_main", raw.get("main_deck_size")), fallback=main_deck_size),
-            max_main=_to_int(raw.get("max_main", raw.get("main_deck_size")), fallback=main_deck_size),
+            min_main=_to_int(
+                raw.get("min_main", raw.get("main_deck_size")), fallback=main_deck_size
+            ),
+            max_main=_to_int(
+                raw.get("max_main", raw.get("main_deck_size")), fallback=main_deck_size
+            ),
             min_extra=_to_int(raw.get("min_extra"), fallback=0),
-            max_extra=_to_int(raw.get("max_extra", raw.get("extra_deck_size")), fallback=extra_deck_size),
+            max_extra=_to_int(
+                raw.get("max_extra", raw.get("extra_deck_size")), fallback=extra_deck_size
+            ),
             legality_source=raw.get("legality_source"),
             card_type_ratios=ratios,
             generation=raw.get("generation", {}),
