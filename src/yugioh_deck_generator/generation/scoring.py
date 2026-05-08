@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
+import multiprocessing as mp
 import random
 import time
 from pathlib import Path
@@ -11,6 +13,13 @@ from typing import Any
 import pandas as pd
 
 from yugioh_deck_generator.generation.io import read_table, write_jsonl, write_summary
+
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+logger = logging.getLogger(__name__)
+
+
+_WORKER_STATE: dict[str, Any] = {}
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +33,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sim-trials", type=int, default=2000)
     parser.add_argument("--sim-seed", type=int, default=12345)
     parser.add_argument("--score-version", choices=("v1", "v2", "both"), default="both")
+    parser.add_argument("--num-workers", type=int, default=1)
+    parser.add_argument("--checkpoint-every", type=int, default=200)
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--mlflow-tracking-uri", default=None)
     parser.add_argument(
@@ -525,6 +537,63 @@ def _score_one_deck(
     }
 
 
+def _init_worker(
+    card_type_map: dict[int, str],
+    card_desc_map: dict[int, str],
+    card_level_map: dict[int, int | None],
+    embedding_map: dict[int, list[float]],
+    explicit_starter_ids: set[int],
+    explicit_brick_ids: set[int],
+    sim_trials: int,
+    sim_seed: int,
+) -> None:
+    _WORKER_STATE["card_type_map"] = card_type_map
+    _WORKER_STATE["card_desc_map"] = card_desc_map
+    _WORKER_STATE["card_level_map"] = card_level_map
+    _WORKER_STATE["embedding_map"] = embedding_map
+    _WORKER_STATE["explicit_starter_ids"] = explicit_starter_ids
+    _WORKER_STATE["explicit_brick_ids"] = explicit_brick_ids
+    _WORKER_STATE["sim_trials"] = sim_trials
+    _WORKER_STATE["sim_seed"] = sim_seed
+
+
+def _score_one_deck_worker(payload: tuple[int, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
+    idx, deck = payload
+    row = _score_one_deck(
+        deck=deck,
+        card_type_map=_WORKER_STATE["card_type_map"],
+        card_desc_map=_WORKER_STATE["card_desc_map"],
+        card_level_map=_WORKER_STATE["card_level_map"],
+        embedding_map=_WORKER_STATE["embedding_map"],
+        explicit_starter_ids=_WORKER_STATE["explicit_starter_ids"],
+        explicit_brick_ids=_WORKER_STATE["explicit_brick_ids"],
+        sim_trials=_WORKER_STATE["sim_trials"],
+        sim_seed=int(_WORKER_STATE["sim_seed"]) + idx,
+    )
+    row["source_row_index"] = int(idx)
+    return idx, row
+
+
+def _load_checkpoint_rows(checkpoint_path: Path) -> dict[int, dict[str, Any]]:
+    if not checkpoint_path.exists():
+        return {}
+    loaded: dict[int, dict[str, Any]] = {}
+    with checkpoint_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            idx = _safe_int(row.get("source_row_index"))
+            if idx is None:
+                continue
+            loaded[int(idx)] = row
+    return loaded
+
+
 def _extract_role_ids(role_tags_df: pd.DataFrame) -> tuple[set[int], set[int]]:
     if (
         role_tags_df.empty
@@ -593,6 +662,9 @@ def score_decks(
     sim_trials: int = 2000,
     sim_seed: int = 12345,
     score_version: str = "both",
+    num_workers: int = 1,
+    checkpoint_every: int = 200,
+    resume: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, Any], list[Path]]:
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -617,20 +689,112 @@ def score_decks(
     starter_ids, brick_ids = _extract_role_ids(tags_source)
 
     deck_records = decks_df.to_dict(orient="records")
-    scored_rows = [
-        _score_one_deck(
-            deck=row,
-            card_type_map=card_type_map,
-            card_desc_map=card_desc_map,
-            card_level_map=card_level_map,
-            embedding_map=embedding_map,
-            explicit_starter_ids=starter_ids,
-            explicit_brick_ids=brick_ids,
-            sim_trials=sim_trials,
-            sim_seed=sim_seed + idx,
-        )
-        for idx, row in enumerate(deck_records)
+    checkpoint_path = out_root / "deck_heuristic_scores.checkpoint.jsonl"
+    if not resume and checkpoint_path.exists():
+        checkpoint_path.unlink()
+        logger.info("Removed existing checkpoint file for fresh run: %s", checkpoint_path)
+    scored_by_idx = _load_checkpoint_rows(checkpoint_path) if resume else {}
+    pending_payloads = [
+        (idx, row) for idx, row in enumerate(deck_records) if idx not in scored_by_idx
     ]
+    logger.info(
+        "Starting scoring run total_decks=%d resume=%s recovered=%d pending=%d "
+        "workers=%d trials=%d",
+        len(deck_records),
+        str(resume).lower(),
+        len(scored_by_idx),
+        len(pending_payloads),
+        int(num_workers),
+        int(sim_trials),
+    )
+
+    _init_worker(
+        card_type_map=card_type_map,
+        card_desc_map=card_desc_map,
+        card_level_map=card_level_map,
+        embedding_map=embedding_map,
+        explicit_starter_ids=starter_ids,
+        explicit_brick_ids=brick_ids,
+        sim_trials=sim_trials,
+        sim_seed=sim_seed,
+    )
+
+    append_since_flush = 0
+    processed_since_log = 0
+    next_log_target = max(500, int(checkpoint_every))
+    processed_total = len(scored_by_idx)
+    if pending_payloads:
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        with checkpoint_path.open("a", encoding="utf-8") as ckpt:
+            if int(num_workers) <= 1:
+                for payload in pending_payloads:
+                    idx, row = _score_one_deck_worker(payload)
+                    scored_by_idx[idx] = row
+                    ckpt.write(json.dumps(row, ensure_ascii=True) + "\n")
+                    append_since_flush += 1
+                    processed_since_log += 1
+                    processed_total += 1
+                    if append_since_flush >= max(1, int(checkpoint_every)):
+                        ckpt.flush()
+                        append_since_flush = 0
+                    if processed_since_log >= next_log_target:
+                        logger.info(
+                            "Scoring progress processed=%d/%d (%.2f%%)",
+                            processed_total,
+                            len(deck_records),
+                            (100.0 * processed_total / float(len(deck_records) or 1)),
+                        )
+                        processed_since_log = 0
+            else:
+                worker_count = max(1, int(num_workers))
+                logger.info("Scoring with multiprocessing workers=%d", worker_count)
+                with mp.Pool(
+                    processes=worker_count,
+                    initializer=_init_worker,
+                    initargs=(
+                        card_type_map,
+                        card_desc_map,
+                        card_level_map,
+                        embedding_map,
+                        starter_ids,
+                        brick_ids,
+                        sim_trials,
+                        sim_seed,
+                    ),
+                ) as pool:
+                    chunk_size = max(
+                        1,
+                        min(200, len(pending_payloads) // (worker_count * 4) or 1),
+                    )
+                    for idx, row in pool.imap_unordered(
+                        _score_one_deck_worker,
+                        pending_payloads,
+                        chunksize=chunk_size,
+                    ):
+                        scored_by_idx[idx] = row
+                        ckpt.write(json.dumps(row, ensure_ascii=True) + "\n")
+                        append_since_flush += 1
+                        processed_since_log += 1
+                        processed_total += 1
+                        if append_since_flush >= max(1, int(checkpoint_every)):
+                            ckpt.flush()
+                            append_since_flush = 0
+                        if processed_since_log >= next_log_target:
+                            logger.info(
+                                "Scoring progress processed=%d/%d (%.2f%%)",
+                                processed_total,
+                                len(deck_records),
+                                (100.0 * processed_total / float(len(deck_records) or 1)),
+                            )
+                            processed_since_log = 0
+            ckpt.flush()
+
+    if len(scored_by_idx) != len(deck_records):
+        missing = len(deck_records) - len(scored_by_idx)
+        raise RuntimeError(f"Scoring incomplete; missing {missing} deck rows.")
+    logger.info("Scoring complete processed=%d/%d", len(scored_by_idx), len(deck_records))
+
+    scored_rows = [scored_by_idx[idx] for idx in sorted(scored_by_idx.keys())]
     scored_df = pd.DataFrame(scored_rows)
 
     scored_jsonl = out_root / "deck_heuristic_scores.jsonl"
@@ -818,6 +982,9 @@ def run(args: argparse.Namespace) -> int:
         sim_trials=args.sim_trials,
         sim_seed=args.sim_seed,
         score_version=args.score_version,
+        num_workers=args.num_workers,
+        checkpoint_every=args.checkpoint_every,
+        resume=args.resume,
     )
 
     run_name = args.mlflow_run_name or f"deck-scoring-{args.run_id or 'adhoc'}"
@@ -826,6 +993,9 @@ def run(args: argparse.Namespace) -> int:
         "source_cards_file": str(Path(args.cards_file)),
         "scoring_output_dir": str(out_root),
         "score_version": str(args.score_version),
+        "sim_trials": str(args.sim_trials),
+        "num_workers": str(args.num_workers),
+        "resume_enabled": str(bool(args.resume)).lower(),
     }
     if args.embeddings_file:
         tags["source_embeddings_file"] = str(Path(args.embeddings_file))
