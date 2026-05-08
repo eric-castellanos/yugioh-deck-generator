@@ -35,8 +35,7 @@ def parse_args() -> argparse.Namespace:
         "--input-file",
         default=None,
         help=(
-            "Optional path to a specific raw JSON file. "
-            "If omitted, latest file in raw-dir is used."
+            "Optional path to a specific raw JSON file. If omitted, latest file in raw-dir is used."
         ),
     )
     parser.add_argument(
