@@ -32,7 +32,7 @@ from yugioh_deck_generator.generation.schemas import GeneratedDeck
 from yugioh_deck_generator.generation.validator import validate_generated_deck
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
-logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 ENABLE_PROGRESS_TRACKING = True
 
@@ -67,6 +67,7 @@ def generate_for_format(
     progress_rejected_path: str | None = None,
     output_root: str | None = None,
     progress_queue: Any | None = None,
+    allow_card_ids: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     logger.info(
         "Generating for format=%s decks_per_format=%d mode=%s seed=%d",
@@ -80,7 +81,20 @@ def generate_for_format(
 
     banlist = read_banlist(format_cfg.legality_source)
     card_copy_limits = _copy_limits_from_banlist(banlist)
-    main_pool, extra_pool = build_candidate_pool(cards_df)
+    generation_cards_df = cards_df
+    if allow_card_ids is not None:
+        generation_cards_df = cards_df[cards_df["id"].astype(int).isin(allow_card_ids)].copy()
+        logger.info(
+            "Format=%s restricting generation cards via allowlist: original=%d filtered=%d",
+            format_name,
+            len(cards_df),
+            len(generation_cards_df),
+        )
+    main_pool, extra_pool = build_candidate_pool(generation_cards_df, allow_card_ids=allow_card_ids)
+    if main_pool.empty:
+        raise RuntimeError(
+            f"No main-deck candidates remain for format={format_name} after cards.cdb filtering"
+        )
     logger.info(
         "Format=%s pools ready main_candidates=%d extra_candidates=%d copy_limits=%d",
         format_name,
@@ -89,14 +103,14 @@ def generate_for_format(
         len(card_copy_limits),
     )
 
-    merged = cards_df.merge(clusters_df, how="left", left_on="id", right_on="card_id")
+    merged = generation_cards_df.merge(clusters_df, how="left", left_on="id", right_on="card_id")
     sampling_inputs = prepare_sampling_inputs(main_df=main_pool, extra_df=extra_pool)
     rng = Random(seed)
     generation_cfg = getattr(format_cfg, "generation", {}) or {}
     if not isinstance(generation_cfg, dict):
         generation_cfg = {}
     max_resample_attempts = int(generation_cfg.get("max_resample_attempts", 50))
-    card_lookup = cards_df.set_index("id", drop=False)
+    card_lookup = generation_cards_df.set_index("id", drop=False)
     known_ids = set(int(x) for x in card_lookup.index.tolist())
     total_attempts_cap = max(max_resample_attempts * decks_per_format * 5, decks_per_format)
 
@@ -165,7 +179,7 @@ def generate_for_format(
 
             t1 = time.perf_counter()
             ok, flags, errors = validate_generated_deck(
-                cards_df=cards_df,
+                cards_df=generation_cards_df,
                 main_ids=main_ids,
                 extra_ids=extra_ids,
                 side_ids=[],
@@ -212,7 +226,7 @@ def generate_for_format(
                 repair_calls += 1
                 t3 = time.perf_counter()
                 ok, flags, errors = validate_generated_deck(
-                    cards_df=cards_df,
+                    cards_df=generation_cards_df,
                     main_ids=main_ids,
                     extra_ids=extra_ids,
                     side_ids=[],
@@ -379,6 +393,7 @@ def run_generation(
     resume_run_id: str | None = None,
     seed: int,
     parallel_formats: int | None = None,
+    allow_card_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     logger.info(
         "Run generation start formats=%s decks_per_format=%d mode=%s seed=%d output_dir=%s",
@@ -388,6 +403,8 @@ def run_generation(
         seed,
         output_dir,
     )
+    if allow_card_ids is not None:
+        logger.info("cards.cdb ID filtering enabled allowlist_size=%d", len(allow_card_ids))
     run_id = resume_run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_root = Path(output_dir) / run_id
     out_root.mkdir(parents=True, exist_ok=True)
@@ -448,6 +465,7 @@ def run_generation(
                 "progress_accepted_path": str(fmt_accepted_path),
                 "progress_rejected_path": str(fmt_rejected_path),
                 "output_root": str(out_root),
+                "allow_card_ids": allow_card_ids,
             }
         )
 
