@@ -177,7 +177,13 @@ def _material_clauses(desc: str) -> list[str]:
     head = re.split(r"[;\n]", text, maxsplit=1)[0].strip()
     if not head:
         return []
-    if "monster" not in head and "tuner" not in head and "+" not in head and "\"" not in head and "'" not in head:
+    if (
+        "monster" not in head
+        and "tuner" not in head
+        and "+" not in head
+        and '"' not in head
+        and "'" not in head
+    ):
         return []
     return [head]
 
@@ -258,7 +264,11 @@ def extract_required_monster_tag_counts(extra_rows: list[pd.Series]) -> dict[str
                 race = _normalize_name(race_text)
                 if race and race not in _ATTRS:
                     _add_requirement(requirements, _make_tag("type", race, role_text), 1)
-            for count_text, role_text, arch_text in _COUNTED_QUALIFIED_QUOTED_ARCHETYPE.findall(desc):
+            for (
+                count_text,
+                role_text,
+                arch_text,
+            ) in _COUNTED_QUALIFIED_QUOTED_ARCHETYPE.findall(desc):
                 arch = _normalize_name(arch_text)
                 if arch:
                     _add_requirement(
@@ -266,7 +276,11 @@ def extract_required_monster_tag_counts(extra_rows: list[pd.Series]) -> dict[str
                         _make_tag("archetype", arch, role_text),
                         int(count_text),
                     )
-            for count_text, arch_text, role_text in _COUNTED_QUOTED_ARCHETYPE_QUALIFIED.findall(desc):
+            for (
+                count_text,
+                arch_text,
+                role_text,
+            ) in _COUNTED_QUOTED_ARCHETYPE_QUALIFIED.findall(desc):
                 arch = _normalize_name(arch_text)
                 if arch:
                     _add_requirement(

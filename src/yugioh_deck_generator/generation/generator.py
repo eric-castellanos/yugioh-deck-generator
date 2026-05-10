@@ -8,7 +8,7 @@ import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from queue import Empty
 from random import Random
@@ -50,7 +50,10 @@ def _apply_tcg_release_cutoff(
     if not cutoff_date:
         return cards_df, 0
     if "tcg_date" not in cards_df.columns:
-        logger.warning("tcg_release_cutoff=%s configured but cards_df has no tcg_date column", cutoff_date)
+        logger.warning(
+            "tcg_release_cutoff=%s configured but cards_df has no tcg_date column",
+            cutoff_date,
+        )
         return cards_df.iloc[0:0].copy(), len(cards_df)
     parsed_dates = pd.to_datetime(cards_df["tcg_date"], errors="coerce")
     cutoff_ts = pd.to_datetime(cutoff_date, errors="coerce")
@@ -109,7 +112,9 @@ def generate_for_format(
     card_copy_limits = _copy_limits_from_banlist(banlist)
     generation_cards_df = cards_df
     cutoff_date = getattr(format_cfg, "tcg_release_cutoff", None)
-    generation_cards_df, dropped_by_cutoff = _apply_tcg_release_cutoff(generation_cards_df, cutoff_date)
+    generation_cards_df, dropped_by_cutoff = _apply_tcg_release_cutoff(
+        generation_cards_df, cutoff_date
+    )
     if cutoff_date:
         logger.info(
             "Format=%s applied tcg_release_cutoff=%s kept=%d dropped=%d",
@@ -124,7 +129,10 @@ def generate_for_format(
             generation_cards_df, cutoff_date
         )
         logger.info(
-            "Format=%s restricting generation cards via allowlist: original=%d filtered=%d dropped_by_cutoff=%d",
+            (
+                "Format=%s restricting generation cards via allowlist: "
+                "original=%d filtered=%d dropped_by_cutoff=%d"
+            ),
             format_name,
             len(cards_df),
             len(generation_cards_df),
@@ -449,7 +457,7 @@ def run_generation(
     )
     if allow_card_ids is not None:
         logger.info("cards.cdb ID filtering enabled allowlist_size=%d", len(allow_card_ids))
-    run_id = resume_run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = resume_run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out_root = Path(output_dir) / run_id
     out_root.mkdir(parents=True, exist_ok=True)
     logger.info("Run output directory: %s", out_root)

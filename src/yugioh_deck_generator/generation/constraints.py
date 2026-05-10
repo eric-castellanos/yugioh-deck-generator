@@ -113,7 +113,10 @@ def validate_deck(
     if tcg_release_cutoff:
         cutoff_ts = pd.to_datetime(tcg_release_cutoff, errors="coerce")
         if pd.isna(cutoff_ts):
-            logger.warning("Invalid tcg_release_cutoff=%s; skipping date validation", tcg_release_cutoff)
+            logger.warning(
+                "Invalid tcg_release_cutoff=%s; skipping date validation",
+                tcg_release_cutoff,
+            )
         elif "tcg_date" not in lookup.columns:
             format_release_ok = False
             errors.append("format tcg cutoff set but cards data has no tcg_date column")
@@ -124,12 +127,16 @@ def validate_deck(
                 release_date = pd.to_datetime(lookup.at[cid, "tcg_date"], errors="coerce")
                 if pd.isna(release_date):
                     format_release_ok = False
-                    errors.append(f"card {cid} has missing/invalid tcg_date for cutoff {tcg_release_cutoff}")
+                    errors.append(
+                        f"card {cid} has missing/invalid tcg_date for cutoff "
+                        f"{tcg_release_cutoff}"
+                    )
                     continue
                 if release_date > cutoff_ts:
                     format_release_ok = False
                     errors.append(
-                        f"card {cid} tcg_date {release_date.date().isoformat()} exceeds cutoff {tcg_release_cutoff}"
+                        f"card {cid} tcg_date {release_date.date().isoformat()} "
+                        f"exceeds cutoff {tcg_release_cutoff}"
                     )
     flags["format_release_ok"] = format_release_ok
     if not format_release_ok:
