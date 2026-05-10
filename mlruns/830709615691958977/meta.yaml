@@ -1,0 +1,6 @@
+artifact_location: file:///home/ecast229/Projects/yugioh-deck-generator/mlruns/830709615691958977
+creation_time: 1777776250088
+experiment_id: '830709615691958977'
+last_update_time: 1777776250088
+lifecycle_stage: active
+name: yugioh-deck-generator/clustering-embeddings

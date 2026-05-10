@@ -1,0 +1,1082 @@
+{
+  "staple_pools": {
+    "Advanced": [
+      {
+        "card_id": 14558127,
+        "weight": 1.0,
+        "tags": [
+          "hand_trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 94145021,
+        "weight": 0.95,
+        "tags": [
+          "hand_trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 27204311,
+        "weight": 0.9,
+        "tags": [
+          "hand_trap",
+          "board_breaker"
+        ]
+      },
+      {
+        "card_id": 97268402,
+        "weight": 0.8,
+        "tags": [
+          "hand_trap",
+          "tuner"
+        ]
+      },
+      {
+        "card_id": 10045474,
+        "weight": 1.0,
+        "tags": [
+          "trap",
+          "negation"
+        ]
+      },
+      {
+        "card_id": 24224830,
+        "weight": 1.0,
+        "tags": [
+          "spell",
+          "grave_hate"
+        ]
+      },
+      {
+        "card_id": 65681983,
+        "weight": 0.75,
+        "tags": [
+          "spell",
+          "counter"
+        ]
+      },
+      {
+        "card_id": 25311006,
+        "weight": 0.9,
+        "tags": [
+          "spell",
+          "value"
+        ]
+      },
+      {
+        "card_id": 35269904,
+        "weight": 0.85,
+        "tags": [
+          "spell",
+          "search"
+        ]
+      },
+      {
+        "card_id": 18144507,
+        "weight": 0.7,
+        "tags": [
+          "removal",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 14532163,
+        "weight": 0.7,
+        "tags": [
+          "board_breaker",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 15693423,
+        "weight": 0.75,
+        "tags": [
+          "board_breaker",
+          "trap"
+        ]
+      },
+      {
+        "card_id": 29301450,
+        "weight": 0.9,
+        "tags": [
+          "extra",
+          "link"
+        ]
+      },
+      {
+        "card_id": 65741786,
+        "weight": 0.75,
+        "tags": [
+          "extra",
+          "link"
+        ]
+      },
+      {
+        "card_id": 86066372,
+        "weight": 0.7,
+        "tags": [
+          "extra",
+          "link"
+        ]
+      },
+      {
+        "card_id": 90448279,
+        "weight": 0.7,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      }
+    ],
+    "Edison": [
+      {
+        "card_id": 97268402,
+        "weight": 0.9,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 24508238,
+        "weight": 0.85,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 71564252,
+        "weight": 0.9,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 9748752,
+        "weight": 0.9,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 21502796,
+        "weight": 0.85,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 26202165,
+        "weight": 0.8,
+        "tags": [
+          "monster",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 44330098,
+        "weight": 0.75,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 70095154,
+        "weight": 0.75,
+        "tags": [
+          "monster",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 5318639,
+        "weight": 0.95,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 19613556,
+        "weight": 0.9,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 87910978,
+        "weight": 0.85,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 14087893,
+        "weight": 0.95,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 1475311,
+        "weight": 0.75,
+        "tags": [
+          "spell",
+          "engine"
+        ]
+      },
+      {
+        "card_id": 94886282,
+        "weight": 0.75,
+        "tags": [
+          "spell",
+          "engine"
+        ]
+      },
+      {
+        "card_id": 67169062,
+        "weight": 0.8,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 81439173,
+        "weight": 0.7,
+        "tags": [
+          "spell",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 29401950,
+        "weight": 0.95,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 53582587,
+        "weight": 0.95,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 44095762,
+        "weight": 0.9,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 41420027,
+        "weight": 0.85,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 93016201,
+        "weight": 0.8,
+        "tags": [
+          "trap",
+          "floodgate"
+        ]
+      },
+      {
+        "card_id": 64697231,
+        "weight": 0.8,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 70342110,
+        "weight": 0.8,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 94192409,
+        "weight": 0.75,
+        "tags": [
+          "trap",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 44508094,
+        "weight": 0.8,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 73580471,
+        "weight": 0.8,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 50321796,
+        "weight": 0.75,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 7391448,
+        "weight": 0.75,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 26593852,
+        "weight": 0.75,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 23693634,
+        "weight": 0.7,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 70780151,
+        "weight": 0.7,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 27315304,
+        "weight": 0.65,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 79229522,
+        "weight": 0.6,
+        "tags": [
+          "extra",
+          "fusion"
+        ]
+      }
+    ],
+    "GOAT": [
+      {
+        "card_id": 72989439,
+        "weight": 1.0,
+        "tags": [
+          "monster",
+          "boss"
+        ]
+      },
+      {
+        "card_id": 71413901,
+        "weight": 0.95,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 33184167,
+        "weight": 0.9,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 31560081,
+        "weight": 0.9,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 8131171,
+        "weight": 0.85,
+        "tags": [
+          "monster",
+          "engine"
+        ]
+      },
+      {
+        "card_id": 26202165,
+        "weight": 0.85,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 7572887,
+        "weight": 0.9,
+        "tags": [
+          "monster",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 34853266,
+        "weight": 0.75,
+        "tags": [
+          "monster",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 33508719,
+        "weight": 0.75,
+        "tags": [
+          "monster",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 2134346,
+        "weight": 0.7,
+        "tags": [
+          "monster",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 55144522,
+        "weight": 1.0,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 79571449,
+        "weight": 1.0,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 44763025,
+        "weight": 0.95,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 19613556,
+        "weight": 0.9,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 5318639,
+        "weight": 0.9,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 45986603,
+        "weight": 0.85,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 14087893,
+        "weight": 0.9,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 71044499,
+        "weight": 0.85,
+        "tags": [
+          "spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 73915051,
+        "weight": 0.9,
+        "tags": [
+          "spell",
+          "engine"
+        ]
+      },
+      {
+        "card_id": 46411259,
+        "weight": 0.95,
+        "tags": [
+          "spell",
+          "engine"
+        ]
+      },
+      {
+        "card_id": 70828912,
+        "weight": 0.75,
+        "tags": [
+          "spell",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 98045062,
+        "weight": 0.7,
+        "tags": [
+          "spell",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 44095762,
+        "weight": 0.9,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 53582587,
+        "weight": 0.9,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 83555666,
+        "weight": 0.85,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 97077563,
+        "weight": 0.85,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 60082869,
+        "weight": 0.75,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 64697231,
+        "weight": 0.75,
+        "tags": [
+          "trap",
+          "tech"
+        ]
+      },
+      {
+        "card_id": 56120475,
+        "weight": 0.75,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 63519819,
+        "weight": 0.95,
+        "tags": [
+          "extra",
+          "fusion"
+        ]
+      },
+      {
+        "card_id": 80071763,
+        "weight": 0.75,
+        "tags": [
+          "extra",
+          "fusion"
+        ]
+      },
+      {
+        "card_id": 49868263,
+        "weight": 0.7,
+        "tags": [
+          "extra",
+          "fusion"
+        ]
+      },
+      {
+        "card_id": 66235877,
+        "weight": 0.7,
+        "tags": [
+          "extra",
+          "fusion"
+        ]
+      },
+      {
+        "card_id": 85684223,
+        "weight": 0.65,
+        "tags": [
+          "extra",
+          "fusion"
+        ]
+      }
+    ],
+    "Tengu Plant": [
+      {
+        "card_id": 10028593,
+        "weight": 1.0,
+        "tags": [
+          "engine",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 10802915,
+        "weight": 0.95,
+        "tags": [
+          "engine",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 26202165,
+        "weight": 0.8,
+        "tags": [
+          "search",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 23434538,
+        "weight": 0.85,
+        "tags": [
+          "hand_trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 67169062,
+        "weight": 0.9,
+        "tags": [
+          "draw",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 5318639,
+        "weight": 0.9,
+        "tags": [
+          "removal",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 53582587,
+        "weight": 0.9,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 84749824,
+        "weight": 0.85,
+        "tags": [
+          "trap",
+          "negation"
+        ]
+      },
+      {
+        "card_id": 50091196,
+        "weight": 0.8,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 90953320,
+        "weight": 0.75,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 52687916,
+        "weight": 0.8,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 95992081,
+        "weight": 0.7,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      }
+    ],
+    "HAT": [
+      {
+        "card_id": 85103922,
+        "weight": 1.0,
+        "tags": [
+          "artifact",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 12444060,
+        "weight": 1.0,
+        "tags": [
+          "artifact",
+          "trap"
+        ]
+      },
+      {
+        "card_id": 91812341,
+        "weight": 0.95,
+        "tags": [
+          "traptrix",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 45803070,
+        "weight": 0.85,
+        "tags": [
+          "traptrix",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 68535320,
+        "weight": 0.8,
+        "tags": [
+          "hands",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 95929069,
+        "weight": 0.8,
+        "tags": [
+          "hands",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 54447022,
+        "weight": 0.85,
+        "tags": [
+          "power_spell",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 5318639,
+        "weight": 0.8,
+        "tags": [
+          "removal",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 29401950,
+        "weight": 0.85,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 94192409,
+        "weight": 0.8,
+        "tags": [
+          "trap",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 48739166,
+        "weight": 0.85,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      },
+      {
+        "card_id": 46772449,
+        "weight": 0.8,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      },
+      {
+        "card_id": 21044178,
+        "weight": 0.9,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      }
+    ],
+    "TeleDAD": [
+      {
+        "card_id": 65192027,
+        "weight": 1.0,
+        "tags": [
+          "boss",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 9411399,
+        "weight": 1.0,
+        "tags": [
+          "engine",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 40044918,
+        "weight": 0.9,
+        "tags": [
+          "engine",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 59575539,
+        "weight": 0.8,
+        "tags": [
+          "tuner",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 33420078,
+        "weight": 0.85,
+        "tags": [
+          "tuner",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 1475311,
+        "weight": 0.9,
+        "tags": [
+          "draw",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 45809008,
+        "weight": 0.95,
+        "tags": [
+          "draw",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 67723438,
+        "weight": 0.95,
+        "tags": [
+          "engine",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 32807846,
+        "weight": 0.85,
+        "tags": [
+          "search",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 41420027,
+        "weight": 0.8,
+        "tags": [
+          "trap",
+          "negation"
+        ]
+      },
+      {
+        "card_id": 44095762,
+        "weight": 0.75,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 44508094,
+        "weight": 0.85,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      },
+      {
+        "card_id": 7391448,
+        "weight": 0.8,
+        "tags": [
+          "extra",
+          "synchro"
+        ]
+      }
+    ],
+    "Meadowlands": [
+      {
+        "card_id": 6353603,
+        "weight": 1.0,
+        "tags": [
+          "engine",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 57103969,
+        "weight": 1.0,
+        "tags": [
+          "engine",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 10802915,
+        "weight": 0.9,
+        "tags": [
+          "engine",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 42874792,
+        "weight": 0.75,
+        "tags": [
+          "engine",
+          "monster"
+        ]
+      },
+      {
+        "card_id": 5318639,
+        "weight": 0.8,
+        "tags": [
+          "removal",
+          "spell"
+        ]
+      },
+      {
+        "card_id": 53582587,
+        "weight": 0.8,
+        "tags": [
+          "trap",
+          "staple"
+        ]
+      },
+      {
+        "card_id": 50078509,
+        "weight": 0.8,
+        "tags": [
+          "trap",
+          "utility"
+        ]
+      },
+      {
+        "card_id": 21044178,
+        "weight": 0.9,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      },
+      {
+        "card_id": 80117527,
+        "weight": 0.8,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      },
+      {
+        "card_id": 22110647,
+        "weight": 0.75,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      },
+      {
+        "card_id": 25341652,
+        "weight": 0.7,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      },
+      {
+        "card_id": 95992081,
+        "weight": 0.75,
+        "tags": [
+          "extra",
+          "xyz"
+        ]
+      }
+    ]
+  }
+}

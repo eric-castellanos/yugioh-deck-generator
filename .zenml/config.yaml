@@ -1,0 +1,10 @@
+active_project_id: d89f5521-9a39-4597-8e88-a053d07faa6a
+active_stack_id: 4a1097bd-e932-4e5b-aaf5-602bc82763da
+analytics_opt_in: true
+store:
+  http_timeout: 30
+  type: rest
+  url: http://localhost:8080
+  verify_ssl: true
+user_id: 56deb2be-b0d2-4fcf-9666-bf92867d71f7
+version: 0.85.0

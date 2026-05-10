@@ -1,0 +1,11 @@
+,card_id,type,race,attribute,level,atk,def,scale,linkval,archetype,is_effect_monster,is_extra_deck,is_spell,is_trap,feature_version,generated_at
+0,80181649,Spell Card,Continuous,,,,,,,K9,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+1,34541863,Spell Card,Continuous,,,,,,,Alien,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+2,64163367,Spell Card,Continuous,,,,,,,Alien,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+3,91231901,Spell Card,Quick-Play,,,,,,,Alien,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+4,73262676,Spell Card,Quick-Play,,,,,,,Alien,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+5,98319530,Spell Card,Equip,,,,,,,Infernoble Arms,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+6,37478723,Spell Card,Equip,,,,,,,Noble Knight,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+7,64867422,Spell Card,Equip,,,,,,,Noble Knight,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+8,90861137,Spell Card,Equip,,,,,,,Noble Knight,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
+9,44256816,Spell Card,Normal,,,,,,,Melodious,False,False,True,False,20260502T200404Z,2026-05-02T20:04:04.529611+00:00
