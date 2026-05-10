@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from yugioh_deck_generator.generation.schemas import FormatConfig, RatioConfig
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s | %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
+_DATE_IN_PATH = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
 def _to_int(value: Any, *, fallback: int) -> int:
@@ -74,6 +76,12 @@ def load_formats(path: str | Path) -> dict[str, FormatConfig]:
         )
         main_deck_size = _to_int(raw.get("main_deck_size", raw.get("deck_size")), fallback=40)
         extra_deck_size = _to_int(raw.get("extra_deck_size"), fallback=15)
+        tcg_release_cutoff = raw.get("tcg_release_cutoff")
+        if tcg_release_cutoff is None:
+            legality_source = str(raw.get("legality_source") or "")
+            m = _DATE_IN_PATH.search(legality_source)
+            if m:
+                tcg_release_cutoff = m.group(1)
         result[name] = FormatConfig(
             name=name,
             main_deck_size=main_deck_size,
@@ -89,6 +97,7 @@ def load_formats(path: str | Path) -> dict[str, FormatConfig]:
                 raw.get("max_extra", raw.get("extra_deck_size")), fallback=extra_deck_size
             ),
             legality_source=raw.get("legality_source"),
+            tcg_release_cutoff=tcg_release_cutoff,
             card_type_ratios=ratios,
             generation=raw.get("generation", {}),
         )
