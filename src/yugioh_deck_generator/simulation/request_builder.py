@@ -11,14 +11,7 @@ from yugioh_deck_generator.simulation.schemas import SimulationRequest
 
 
 def _extract_int_list(value: object) -> list[int]:
-    if value is None:
-        return []
-    # Handles parquet list columns loaded as numpy arrays.
-    if hasattr(value, "tolist") and not isinstance(value, (str, bytes)):
-        value = value.tolist()
     if isinstance(value, list):
-        return [int(x) for x in value]
-    if isinstance(value, tuple):
         return [int(x) for x in value]
     if isinstance(value, str):
         s = value.strip()
