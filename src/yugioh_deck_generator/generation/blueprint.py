@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from random import Random
 from uuid import uuid4
 
@@ -71,7 +71,7 @@ def build_blueprint(
         novelty_ratio,
     )
     rng = Random(seed)
-    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     primary_cluster: int | None = None
     if clusters_df is not None and "cluster_id" in clusters_df.columns and not clusters_df.empty:
         counts = (

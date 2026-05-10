@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import multiprocessing as mp
+import re
 import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty
 from random import Random
@@ -35,6 +36,31 @@ LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(funcName)s |
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
 ENABLE_PROGRESS_TRACKING = True
+
+
+def _format_slug(name: str) -> str:
+    slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in str(name or "").strip())
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug or "format"
+
+
+def _apply_tcg_release_cutoff(
+    cards_df: pd.DataFrame, cutoff_date: str | None
+) -> tuple[pd.DataFrame, int]:
+    if not cutoff_date:
+        return cards_df, 0
+    if "tcg_date" not in cards_df.columns:
+        logger.warning("tcg_release_cutoff=%s configured but cards_df has no tcg_date column", cutoff_date)
+        return cards_df.iloc[0:0].copy(), len(cards_df)
+    parsed_dates = pd.to_datetime(cards_df["tcg_date"], errors="coerce")
+    cutoff_ts = pd.to_datetime(cutoff_date, errors="coerce")
+    if pd.isna(cutoff_ts):
+        logger.warning("Invalid tcg_release_cutoff=%s; skipping cutoff filter", cutoff_date)
+        return cards_df, 0
+    mask = parsed_dates.notna() & (parsed_dates <= cutoff_ts)
+    filtered = cards_df[mask].copy()
+    dropped = int((~mask).sum())
+    return filtered, dropped
 
 
 def _copy_limits_from_banlist(banlist: dict[str, list[int]] | None) -> dict[int, int]:
@@ -82,13 +108,27 @@ def generate_for_format(
     banlist = read_banlist(format_cfg.legality_source)
     card_copy_limits = _copy_limits_from_banlist(banlist)
     generation_cards_df = cards_df
+    cutoff_date = getattr(format_cfg, "tcg_release_cutoff", None)
+    generation_cards_df, dropped_by_cutoff = _apply_tcg_release_cutoff(generation_cards_df, cutoff_date)
+    if cutoff_date:
+        logger.info(
+            "Format=%s applied tcg_release_cutoff=%s kept=%d dropped=%d",
+            format_name,
+            cutoff_date,
+            len(generation_cards_df),
+            dropped_by_cutoff,
+        )
     if allow_card_ids is not None:
         generation_cards_df = cards_df[cards_df["id"].astype(int).isin(allow_card_ids)].copy()
+        generation_cards_df, dropped_by_cutoff_after_allow = _apply_tcg_release_cutoff(
+            generation_cards_df, cutoff_date
+        )
         logger.info(
-            "Format=%s restricting generation cards via allowlist: original=%d filtered=%d",
+            "Format=%s restricting generation cards via allowlist: original=%d filtered=%d dropped_by_cutoff=%d",
             format_name,
             len(cards_df),
             len(generation_cards_df),
+            dropped_by_cutoff_after_allow,
         )
     main_pool, extra_pool = build_candidate_pool(generation_cards_df, allow_card_ids=allow_card_ids)
     if main_pool.empty:
@@ -195,6 +235,7 @@ def generate_for_format(
                 tolerance_count=spec.card_type_ratios.tolerance_count,
                 card_lookup=card_lookup,
                 known_ids=known_ids,
+                tcg_release_cutoff=cutoff_date,
             )
             validate_time_s += time.perf_counter() - t1
             validate_calls += 1
@@ -242,6 +283,7 @@ def generate_for_format(
                     tolerance_count=spec.card_type_ratios.tolerance_count,
                     card_lookup=card_lookup,
                     known_ids=known_ids,
+                    tcg_release_cutoff=cutoff_date,
                 )
                 validate_time_s += time.perf_counter() - t3
                 validate_calls += 1
@@ -278,8 +320,10 @@ def generate_for_format(
             if progress_accepted_path:
                 append_jsonl(Path(progress_accepted_path), [row])
             if output_root:
+                deck_num = len(accepted)
+                file_name = f"deck_{_format_slug(format_name)}_{deck_num}.ydk"
                 write_ydk(
-                    Path(output_root) / f"{row['deck_id']}.ydk",
+                    Path(output_root) / file_name,
                     row["main"],
                     row["extra"],
                     row["side"],
@@ -405,7 +449,7 @@ def run_generation(
     )
     if allow_card_ids is not None:
         logger.info("cards.cdb ID filtering enabled allowlist_size=%d", len(allow_card_ids))
-    run_id = resume_run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_id = resume_run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_root = Path(output_dir) / run_id
     out_root.mkdir(parents=True, exist_ok=True)
     logger.info("Run output directory: %s", out_root)

@@ -77,6 +77,7 @@ def validate_deck(
     tolerance_count: int = 2,
     card_lookup: pd.DataFrame | None = None,
     known_ids: set[int] | None = None,
+    tcg_release_cutoff: str | None = None,
 ) -> tuple[bool, dict[str, bool], list[str]]:
     logger.info(
         "Validating deck main=%d extra=%d side=%d main_size=%d extra_range=[%d,%d]",
@@ -107,6 +108,32 @@ def validate_deck(
     if not flags["cards_exist_ok"]:
         errors.append("unknown card id present")
         logger.info("Card existence validation failed")
+
+    format_release_ok = True
+    if tcg_release_cutoff:
+        cutoff_ts = pd.to_datetime(tcg_release_cutoff, errors="coerce")
+        if pd.isna(cutoff_ts):
+            logger.warning("Invalid tcg_release_cutoff=%s; skipping date validation", tcg_release_cutoff)
+        elif "tcg_date" not in lookup.columns:
+            format_release_ok = False
+            errors.append("format tcg cutoff set but cards data has no tcg_date column")
+        else:
+            for cid in all_ids:
+                if cid not in known:
+                    continue
+                release_date = pd.to_datetime(lookup.at[cid, "tcg_date"], errors="coerce")
+                if pd.isna(release_date):
+                    format_release_ok = False
+                    errors.append(f"card {cid} has missing/invalid tcg_date for cutoff {tcg_release_cutoff}")
+                    continue
+                if release_date > cutoff_ts:
+                    format_release_ok = False
+                    errors.append(
+                        f"card {cid} tcg_date {release_date.date().isoformat()} exceeds cutoff {tcg_release_cutoff}"
+                    )
+    flags["format_release_ok"] = format_release_ok
+    if not format_release_ok:
+        logger.info("Format release date validation failed")
 
     limits = _merged_limits_from_banlist(banlist, max_default_copies)
     merged_counts = Counter(all_ids)
