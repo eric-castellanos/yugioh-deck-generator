@@ -191,6 +191,44 @@ def test_ratio_tolerance_applies_to_all_three_types() -> None:
     assert ok_tolerant is True
 
 
+def test_format_tcg_release_cutoff_validation() -> None:
+    cards = pd.DataFrame(
+        [
+            {"id": 1, "name": "Old Monster", "type": "Effect Monster", "tcg_date": "2010-01-01"},
+            {"id": 2, "name": "New Monster", "type": "Effect Monster", "tcg_date": "2011-01-01"},
+        ]
+    )
+
+    ok_fail, flags_fail, errors_fail = validate_deck(
+        main_ids=[2],
+        extra_ids=[],
+        side_ids=[],
+        cards_df=cards,
+        main_size=1,
+        extra_min=0,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+        tcg_release_cutoff="2010-03-01",
+    )
+    assert ok_fail is False
+    assert flags_fail["format_release_ok"] is False
+    assert any("exceeds cutoff 2010-03-01" in e for e in errors_fail)
+
+    ok_pass, flags_pass, _ = validate_deck(
+        main_ids=[1],
+        extra_ids=[],
+        side_ids=[],
+        cards_df=cards,
+        main_size=1,
+        extra_min=0,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+        tcg_release_cutoff="2010-03-01",
+    )
+    assert ok_pass is True
+    assert flags_pass["format_release_ok"] is True
+
+
 def test_material_requirements_archetype_tag_validation() -> None:
     cards = pd.DataFrame(
         [
@@ -410,6 +448,312 @@ def test_material_requirements_attribute_tuner_validation() -> None:
     assert flags_pass["material_requirements_ok"] is True
 
 
+def test_material_requirements_specific_fusion_name_validation() -> None:
+    cards = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "name": "Rune Eyes Pendulum Dragon",
+                "type": "Fusion Monster",
+                "desc": "Odd-Eyes Pendulum Dragon + 1 Spellcaster-Type monster",
+            },
+            {
+                "id": 2,
+                "name": "Generic Spellcaster",
+                "type": "Effect Monster",
+                "race": "Spellcaster",
+            },
+            {"id": 3, "name": "Odd-Eyes Pendulum Dragon", "type": "Effect Monster"},
+            {"id": 4, "name": "Other Dragon", "type": "Effect Monster"},
+            {"id": 5, "name": "Polymerization", "type": "Spell Card"},
+        ]
+    )
+
+    ok_fail, flags_fail, errors_fail = validate_deck(
+        main_ids=[2, 4, 5],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=3,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 2 / 3, "spell": 1 / 3, "trap": 0.0},
+    )
+    assert ok_fail is False
+    assert flags_fail["material_requirements_ok"] is False
+    assert any("odd-eyes pendulum dragon" in e for e in errors_fail)
+
+    ok_pass, flags_pass, _ = validate_deck(
+        main_ids=[2, 3, 5],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=3,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 2 / 3, "spell": 1 / 3, "trap": 0.0},
+    )
+    assert ok_pass is True
+    assert flags_pass["material_requirements_ok"] is True
+
+
+def test_material_requirements_multiple_specific_fusion_names_validation() -> None:
+    cards = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "name": "Man-Eating Black Shark",
+                "type": "Fusion Monster",
+                "desc": "Sea Kamen + Gruesome Goo",
+            },
+            {"id": 2, "name": "Sea Kamen", "type": "Normal Monster"},
+            {"id": 3, "name": "Gruesome Goo", "type": "Normal Monster"},
+            {"id": 4, "name": "Random Monster", "type": "Normal Monster"},
+            {"id": 5, "name": "Polymerization", "type": "Spell Card"},
+        ]
+    )
+
+    ok_fail, flags_fail, errors_fail = validate_deck(
+        main_ids=[2, 4, 5],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=3,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 2 / 3, "spell": 1 / 3, "trap": 0.0},
+    )
+    assert ok_fail is False
+    assert flags_fail["material_requirements_ok"] is False
+    assert any("gruesome goo" in e for e in errors_fail)
+
+    ok_pass, flags_pass, _ = validate_deck(
+        main_ids=[2, 3, 5],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=3,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 2 / 3, "spell": 1 / 3, "trap": 0.0},
+    )
+    assert ok_pass is True
+    assert flags_pass["material_requirements_ok"] is True
+
+
+def test_material_requirements_non_tuner_archetype_validation() -> None:
+    cards = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "name": "Clear Wing Example",
+                "type": "Synchro Monster",
+                "desc": '1 Tuner + 1 "Clear Wing" non-Tuner monsters',
+            },
+            {
+                "id": 2,
+                "name": "Clear Wing Tuner",
+                "type": "Tuner Effect Monster",
+                "archetype": "Clear Wing",
+            },
+            {
+                "id": 3,
+                "name": "Clear Wing NonTuner",
+                "type": "Effect Monster",
+                "archetype": "Clear Wing",
+            },
+            {"id": 4, "name": "Generic NonTuner", "type": "Effect Monster", "archetype": "Other"},
+            {
+                "id": 5,
+                "name": "Generic Tuner",
+                "type": "Tuner Effect Monster",
+                "archetype": "Other",
+            },
+        ]
+    )
+
+    ok_fail, flags_fail, errors_fail = validate_deck(
+        main_ids=[2, 5],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=2,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+    )
+    assert ok_fail is False
+    assert flags_fail["material_requirements_ok"] is False
+    assert any("clear wing non-tuner" in e for e in errors_fail)
+
+    ok_pass, flags_pass, _ = validate_deck(
+        main_ids=[2, 3],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=2,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+    )
+    assert ok_pass is True
+    assert flags_pass["material_requirements_ok"] is True
+
+
+def test_material_requirements_non_tuner_attribute_and_type_validation() -> None:
+    cards = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "name": "Qualifier Synchro",
+                "type": "Synchro Monster",
+                "desc": "1 WIND non-Tuner monster + 1 Fish-Type non-Tuner monster + 1 Tuner",
+            },
+            {
+                "id": 2,
+                "name": "Wind Tuner",
+                "type": "Tuner Effect Monster",
+                "attribute": "WIND",
+                "race": "Fish",
+            },
+            {
+                "id": 3,
+                "name": "Wind NonTuner Fish",
+                "type": "Effect Monster",
+                "attribute": "WIND",
+                "race": "Fish",
+            },
+            {
+                "id": 4,
+                "name": "Earth NonTuner Fish",
+                "type": "Effect Monster",
+                "attribute": "EARTH",
+                "race": "Fish",
+            },
+            {
+                "id": 5,
+                "name": "Wind NonTuner Warrior",
+                "type": "Effect Monster",
+                "attribute": "WIND",
+                "race": "Warrior",
+            },
+        ]
+    )
+
+    ok_fail, flags_fail, errors_fail = validate_deck(
+        main_ids=[2, 4],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=2,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+    )
+    assert ok_fail is False
+    assert flags_fail["material_requirements_ok"] is False
+    assert any("wind non-tuner" in e for e in errors_fail)
+
+    ok_pass, flags_pass, _ = validate_deck(
+        main_ids=[2, 3],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=2,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+    )
+    assert ok_pass is True
+    assert flags_pass["material_requirements_ok"] is True
+
+
+def test_material_requirements_link_qualifiers_validation() -> None:
+    cards = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "name": "Link Qualifier Boss",
+                "type": "Link Monster",
+                "desc": "2 Cyberse-Type non-Tuner monsters",
+            },
+            {"id": 2, "name": "Cyberse Tuner", "type": "Tuner Effect Monster", "race": "Cyberse"},
+            {"id": 3, "name": "Cyberse NonTuner", "type": "Effect Monster", "race": "Cyberse"},
+            {"id": 4, "name": "Warrior NonTuner", "type": "Effect Monster", "race": "Warrior"},
+        ]
+    )
+
+    ok_fail, flags_fail, errors_fail = validate_deck(
+        main_ids=[2, 4],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=2,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+    )
+    assert ok_fail is False
+    assert flags_fail["material_requirements_ok"] is False
+    assert any("cyberse non-tuner" in e for e in errors_fail)
+
+    ok_pass, flags_pass, _ = validate_deck(
+        main_ids=[3, 3],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=2,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+    )
+    assert ok_pass is True
+    assert flags_pass["material_requirements_ok"] is True
+
+
+def test_material_requirements_link_plus_count_validation() -> None:
+    cards = pd.DataFrame(
+        [
+            {
+                "id": 1,
+                "name": "Thunder Link Boss",
+                "type": "Link Monster",
+                "desc": "2+ Thunder monsters",
+            },
+            {"id": 2, "name": "Thunder A", "type": "Effect Monster", "race": "Thunder"},
+            {"id": 3, "name": "Thunder B", "type": "Effect Monster", "race": "Thunder"},
+            {"id": 4, "name": "Warrior A", "type": "Effect Monster", "race": "Warrior"},
+        ]
+    )
+
+    ok_fail, flags_fail, errors_fail = validate_deck(
+        main_ids=[2, 4],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=2,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+    )
+    assert ok_fail is False
+    assert flags_fail["material_requirements_ok"] is False
+    assert any("thunder monster" in e for e in errors_fail)
+
+    ok_pass, flags_pass, _ = validate_deck(
+        main_ids=[2, 3],
+        extra_ids=[1],
+        side_ids=[],
+        cards_df=cards,
+        main_size=2,
+        extra_min=1,
+        extra_max=15,
+        ratio_targets={"monster": 1.0, "spell": 0.0, "trap": 0.0},
+    )
+    assert ok_pass is True
+    assert flags_pass["material_requirements_ok"] is True
+
+
 def test_run_generation_outputs_files(tmp_path: Path) -> None:
     cards = _cards_fixture()
     clusters = _cluster_fixture(cards)
@@ -596,3 +940,62 @@ def test_run_generation_allowlist_without_main_candidates_raises(tmp_path: Path)
             seed=42,
             allow_card_ids=allow_card_ids,
         )
+
+
+def test_run_generation_tcg_cutoff_filters_output_ids(tmp_path: Path) -> None:
+    cards = pd.DataFrame(
+        [
+            {"id": 1, "name": "Old Monster A", "type": "Effect Monster", "tcg_date": "2010-01-01"},
+            {"id": 2, "name": "Old Monster B", "type": "Effect Monster", "tcg_date": "2010-01-01"},
+            {"id": 3, "name": "Polymerization", "type": "Spell Card", "tcg_date": "2010-01-01"},
+            {"id": 4, "name": "Old Trap", "type": "Trap Card", "tcg_date": "2010-01-01"},
+            {"id": 5, "name": "Old Fusion", "type": "Fusion Monster", "tcg_date": "2010-01-01"},
+            {"id": 6, "name": "Old Synchro", "type": "Synchro Monster", "tcg_date": "2010-01-01"},
+            {"id": 7, "name": "New Monster", "type": "Effect Monster", "tcg_date": "2011-01-01"},
+            {"id": 8, "name": "New Spell", "type": "Spell Card", "tcg_date": "2011-01-01"},
+            {"id": 9, "name": "New Fusion", "type": "Fusion Monster", "tcg_date": "2011-01-01"},
+        ]
+    )
+    clusters = _cluster_fixture(cards)
+
+    summary = run_generation(
+        cards_df=cards,
+        clusters_df=clusters,
+        formats={
+            "Edison": type(
+                "F",
+                (),
+                {
+                    "name": "Edison",
+                    "main_deck_size": 4,
+                    "extra_deck_size": 1,
+                    "min_extra": 1,
+                    "max_extra": 1,
+                    "legality_source": None,
+                    "tcg_release_cutoff": "2010-03-01",
+                    "card_type_ratios": type(
+                        "R", (), {"monster": 0.5, "spell": 0.25, "trap": 0.25, "tolerance_count": 4}
+                    )(),
+                },
+            )()
+        },
+        selected_formats=["Edison"],
+        decks_per_format=1,
+        mode="archetype_reconstruction",
+        staple_pools={"Edison": []},
+        p_staple=0.0,
+        novelty_ratio=0.0,
+        output_dir=str(tmp_path / "generated_cutoff"),
+        seed=42,
+    )
+
+    assert summary["accepted_count"] == 1
+    decks_path = Path(tmp_path / "generated_cutoff" / summary["run_id"] / "generated_decks.jsonl")
+    rows = [
+        json.loads(line)
+        for line in decks_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(rows) == 1
+    generated_ids = set(rows[0]["main"] + rows[0]["extra"])
+    assert generated_ids.issubset({1, 2, 3, 4, 5, 6})
