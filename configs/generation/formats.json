@@ -1,0 +1,157 @@
+{
+  "formats": {
+    "Advanced": {
+      "main_deck_size": 40,
+      "extra_deck_size": 15,
+      "min_main": 40,
+      "max_main": 60,
+      "min_extra": 0,
+      "max_extra": 15,
+      "legality_source": "data/processed/banlists/advanced_current_tcg.json",
+      "card_type_ratios": {
+        "monster": 0.5,
+        "spell": 0.3,
+        "trap": 0.2,
+        "tolerance_count": 3
+      },
+      "generation": {
+        "default_p_staple": 0.35,
+        "default_novelty_ratio": 0.15,
+        "max_resample_attempts": 75,
+        "ratio_jitter": 0.15
+      }
+    },
+    "Edison": {
+      "main_deck_size": 40,
+      "extra_deck_size": 15,
+      "min_main": 40,
+      "max_main": 40,
+      "min_extra": 15,
+      "max_extra": 15,
+      "legality_source": "data/processed/banlists/edison_2010-03-01_tcg.json",
+      "tcg_release_cutoff": "2010-03-01",
+      "card_type_ratios": {
+        "monster": 0.55,
+        "spell": 0.3,
+        "trap": 0.15,
+        "tolerance_count": 3
+      },
+      "generation": {
+        "default_p_staple": 0.3,
+        "default_novelty_ratio": 0.1,
+        "max_resample_attempts": 50,
+        "ratio_jitter": 0.15
+      }
+    },
+    "GOAT": {
+      "main_deck_size": 40,
+      "extra_deck_size": 15,
+      "min_main": 40,
+      "max_main": 40,
+      "min_extra": 0,
+      "max_extra": 15,
+      "legality_source": "data/processed/banlists/goat_from_parquet.json",
+      "tcg_release_cutoff": "2005-04-21",
+      "card_type_ratios": {
+        "monster": 0.5,
+        "spell": 0.35,
+        "trap": 0.15,
+        "tolerance_count": 3
+      },
+      "generation": {
+        "default_p_staple": 0.3,
+        "default_novelty_ratio": 0.1,
+        "max_resample_attempts": 50,
+        "ratio_jitter": 0.15
+      }
+    },
+    "Tengu Plant": {
+      "main_deck_size": 40,
+      "extra_deck_size": 15,
+      "min_main": 40,
+      "max_main": 40,
+      "min_extra": 15,
+      "max_extra": 15,
+      "legality_source": "data/processed/banlists/tengu_2011-09-01_tcg.json",
+      "tcg_release_cutoff": "2011-09-01",
+      "card_type_ratios": {
+        "monster": 0.55,
+        "spell": 0.3,
+        "trap": 0.15,
+        "tolerance_count": 3
+      },
+      "generation": {
+        "default_p_staple": 0.3,
+        "default_novelty_ratio": 0.12,
+        "max_resample_attempts": 60,
+        "ratio_jitter": 0.15
+      }
+    },
+    "HAT": {
+      "main_deck_size": 40,
+      "extra_deck_size": 15,
+      "min_main": 40,
+      "max_main": 40,
+      "min_extra": 15,
+      "max_extra": 15,
+      "legality_source": "data/processed/banlists/hat_2014-04-01_tcg.json",
+      "tcg_release_cutoff": "2014-04-01",
+      "card_type_ratios": {
+        "monster": 0.5,
+        "spell": 0.25,
+        "trap": 0.25,
+        "tolerance_count": 3
+      },
+      "generation": {
+        "default_p_staple": 0.35,
+        "default_novelty_ratio": 0.1,
+        "max_resample_attempts": 60,
+        "ratio_jitter": 0.15
+      }
+    },
+    "TeleDAD": {
+      "main_deck_size": 40,
+      "extra_deck_size": 15,
+      "min_main": 40,
+      "max_main": 40,
+      "min_extra": 15,
+      "max_extra": 15,
+      "legality_source": "data/processed/banlists/teledad_2008-09-01_tcg.json",
+      "tcg_release_cutoff": "2008-09-01",
+      "card_type_ratios": {
+        "monster": 0.55,
+        "spell": 0.3,
+        "trap": 0.15,
+        "tolerance_count": 3
+      },
+      "generation": {
+        "default_p_staple": 0.3,
+        "default_novelty_ratio": 0.1,
+        "max_resample_attempts": 60,
+        "ratio_jitter": 0.15
+      }
+    },
+    "Meadowlands": {
+      "main_deck_size": 40,
+      "extra_deck_size": 15,
+      "min_main": 40,
+      "max_main": 40,
+      "min_extra": 15,
+      "max_extra": 15,
+      "legality_source": "data/processed/banlists/meadowlands_2013-03-01_tcg.json",
+      "tcg_release_cutoff": "2013-03-01",
+      "card_type_ratios": {
+        "monster": 0.5,
+        "spell": 0.3,
+        "trap": 0.2,
+        "tolerance_count": 3
+      },
+      "generation": {
+        "default_p_staple": 0.3,
+        "default_novelty_ratio": 0.1,
+        "max_resample_attempts": 60,
+        "ratio_jitter": 0.15
+      }
+    }
+  }
+}

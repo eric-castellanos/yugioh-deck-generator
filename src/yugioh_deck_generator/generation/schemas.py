@@ -39,6 +39,7 @@ class FormatConfig(BaseModel):
     min_extra: int = Field(default=0, ge=0)
     max_extra: int = Field(default=15, ge=0)
     legality_source: str | None = None
+    tcg_release_cutoff: str | None = None
     card_type_ratios: RatioConfig = Field(
         default_factory=lambda: RatioConfig(monster=0.5, spell=0.3, trap=0.2, tolerance_count=2)
     )
@@ -82,7 +83,7 @@ class DeckSpec(BaseModel):
         return self
 
 
-@dataclass(slots=True)
+@dataclass
 class GeneratedDeck:
     """Lightweight runtime result container for generated deck outputs and diagnostics."""
 

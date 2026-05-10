@@ -1,0 +1,15 @@
+artifact_uri: file:///home/ecast229/Projects/yugioh-deck-generator/mlruns/830709615691958977/91c7b67fdc0a4e9698190b64ca5363ba/artifacts
+end_time: 1777776250698
+entry_point_name: ''
+experiment_id: '830709615691958977'
+lifecycle_stage: active
+run_id: 91c7b67fdc0a4e9698190b64ca5363ba
+run_name: bootstrap-sub-experiment
+run_uuid: 91c7b67fdc0a4e9698190b64ca5363ba
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1777776250693
+status: 3
+tags: []
+user_id: ecast229

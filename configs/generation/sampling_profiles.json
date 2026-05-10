@@ -1,0 +1,114 @@
+{
+  "sampling_profiles": {
+    "default": {
+      "strategy_type": "archetype_plus_novelty",
+      "p_staple": 0.35,
+      "novelty_ratio": 0.20,
+      "near_novelty_share": 0.67,
+      "far_novelty_share": 0.33,
+      "weights": {
+        "w_cluster_membership": 0.40,
+        "w_card_frequency": 0.20,
+        "w_synergy": 0.25,
+        "w_novelty": 0.15
+      },
+      "card_type_ratios": {
+        "monster": 0.55,
+        "spell": 0.30,
+        "trap": 0.15,
+        "tolerance_count": 2
+      }
+    },
+    "advanced_default": {
+      "strategy_type": "archetype_plus_novelty",
+      "p_staple": 0.35,
+      "novelty_ratio": 0.15,
+      "near_novelty_share": 0.70,
+      "far_novelty_share": 0.30,
+      "card_type_ratios": {
+        "monster": 0.50,
+        "spell": 0.30,
+        "trap": 0.20,
+        "tolerance_count": 3
+      }
+    },
+    "edison_default": {
+      "strategy_type": "archetype_plus_novelty",
+      "p_staple": 0.30,
+      "novelty_ratio": 0.10,
+      "near_novelty_share": 0.75,
+      "far_novelty_share": 0.25,
+      "card_type_ratios": {
+        "monster": 0.55,
+        "spell": 0.30,
+        "trap": 0.15,
+        "tolerance_count": 2
+      }
+    },
+    "goat_default": {
+      "strategy_type": "archetype_plus_novelty",
+      "p_staple": 0.30,
+      "novelty_ratio": 0.10,
+      "near_novelty_share": 0.80,
+      "far_novelty_share": 0.20,
+      "card_type_ratios": {
+        "monster": 0.50,
+        "spell": 0.35,
+        "trap": 0.15,
+        "tolerance_count": 2
+      }
+    },
+    "tengu_plant_default": {
+      "strategy_type": "archetype_plus_novelty",
+      "p_staple": 0.30,
+      "novelty_ratio": 0.12,
+      "near_novelty_share": 0.75,
+      "far_novelty_share": 0.25,
+      "card_type_ratios": {
+        "monster": 0.55,
+        "spell": 0.30,
+        "trap": 0.15,
+        "tolerance_count": 2
+      }
+    },
+    "hat_default": {
+      "strategy_type": "archetype_plus_novelty",
+      "p_staple": 0.35,
+      "novelty_ratio": 0.10,
+      "near_novelty_share": 0.80,
+      "far_novelty_share": 0.20,
+      "card_type_ratios": {
+        "monster": 0.50,
+        "spell": 0.25,
+        "trap": 0.25,
+        "tolerance_count": 2
+      }
+    },
+    "teledad_default": {
+      "strategy_type": "archetype_plus_novelty",
+      "p_staple": 0.30,
+      "novelty_ratio": 0.10,
+      "near_novelty_share": 0.75,
+      "far_novelty_share": 0.25,
+      "card_type_ratios": {
+        "monster": 0.55,
+        "spell": 0.30,
+        "trap": 0.15,
+        "tolerance_count": 2
+      }
+    },
+    "meadowlands_default": {
+      "strategy_type": "archetype_plus_novelty",
+      "p_staple": 0.30,
+      "novelty_ratio": 0.10,
+      "near_novelty_share": 0.75,
+      "far_novelty_share": 0.25,
+      "card_type_ratios": {
+        "monster": 0.50,
+        "spell": 0.30,
+        "trap": 0.20,
+        "tolerance_count": 2
+      }
+    }
+  }
+}

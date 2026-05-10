@@ -19,6 +19,7 @@ def validate_generated_deck(
     tolerance_count: int,
     card_lookup: pd.DataFrame | None = None,
     known_ids: set[int] | None = None,
+    tcg_release_cutoff: str | None = None,
 ) -> tuple[bool, dict[str, bool], list[str]]:
     return validate_deck(
         main_ids=main_ids,
@@ -33,4 +34,5 @@ def validate_generated_deck(
         tolerance_count=tolerance_count,
         card_lookup=card_lookup,
         known_ids=known_ids,
+        tcg_release_cutoff=tcg_release_cutoff,
     )
